@@ -3,6 +3,11 @@ from flask_cors import CORS
 from config import Config
 from models import db
 from flask_migrate import Migrate
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file (must be before anything reads os.environ)
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 app = Flask(__name__)
 app.config.from_object(Config)

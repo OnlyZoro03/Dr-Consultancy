@@ -5,9 +5,11 @@ from PIL import Image
 import os
 import json
 
-# Optional: Google Genai SDK for Gemini LLM-powered explanations
+# Google Generative AI SDK for Gemini LLM-powered explanations
 try:
-    from google import genai as genaipkg
+    import google.generativeai as genai_sdk
+    import warnings
+    warnings.filterwarnings('ignore', category=FutureWarning, module='google')
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
@@ -688,7 +690,8 @@ def _try_gemini_enhance(processed_params, risk_level, risk_reasoning):
     if not (GEMINI_AVAILABLE and GEMINI_API_KEY):
         return None
     try:
-        client = genaipkg.Client(api_key=GEMINI_API_KEY)
+        genai_sdk.configure(api_key=GEMINI_API_KEY)
+        model = genai_sdk.GenerativeModel('gemini-2.0-flash')
         # Build enriched JSON with all available metadata
         json_data = json.dumps({
             "risk_level": risk_level,
@@ -707,7 +710,7 @@ def _try_gemini_enhance(processed_params, risk_level, risk_reasoning):
             ]
         }, indent=2)
         prompt = DOCTOR_EXPLANATION_PROMPT.replace("{JSON_DATA}", json_data)
-        response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+        response = model.generate_content(prompt)
         return response.text
     except Exception:
         return None
@@ -726,7 +729,8 @@ def answer_report_question(question, extracted_data, ai_explanation):
     # Try Gemini if available
     if GEMINI_AVAILABLE and GEMINI_API_KEY:
         try:
-            client = genaipkg.Client(api_key=GEMINI_API_KEY)
+            genai_sdk.configure(api_key=GEMINI_API_KEY)
+            model = genai_sdk.GenerativeModel('gemini-2.0-flash')
             context = json.dumps(extracted_data, indent=2)
             prompt = (
                 "You are an experienced medical doctor explaining lab results to a patient in simple language.\n\n"
@@ -741,7 +745,7 @@ def answer_report_question(question, extracted_data, ai_explanation):
                 "- Always include an explanation even if all values are normal.\n"
                 "Keep the answer concise (2–3 paragraphs)."
             )
-            response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+            response = model.generate_content(prompt)
             return response.text + "\n\n*This is AI-generated educational information only. Please consult your doctor.*"
         except Exception:
             pass
