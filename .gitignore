@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+venv/
+env/
+.env
+*.db
+*.log
+instance/
+
+# Flask uploads (user data)
+backend/uploads/
+
+# Firebase service account (NEVER commit this)
+backend/*.json
+
+# Node / frontend
+frontend/node_modules/
+frontend/.npm_cache/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# macOS
+.DS_Store

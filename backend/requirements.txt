@@ -1,0 +1,15 @@
+Flask
+Flask-SQLAlchemy
+Flask-Cors
+Flask-Migrate
+python-dotenv
+werkzeug
+pyjwt
+python-dotenv
+flask-migrate
+pdfminer.six
+pytesseract
+Pillow
+firebase-admin
+# Optional: Add your Gemini API key in .env as GEMINI_API_KEY to enable LLM-powered responses
+google-genai
