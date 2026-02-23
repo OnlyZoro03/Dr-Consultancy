@@ -660,20 +660,53 @@ def _generate_wellness_plan(processed_params, risk_level):
     }
 
 
-def _try_gemini_enhance(text_summary, params_json):
-    """Optionally enhance explanations with Gemini AI if API key is available."""
+# ─── Patient-Friendly Doctor Explanation Prompt ──────────────────────────────
+DOCTOR_EXPLANATION_PROMPT = """
+You are an experienced medical doctor explaining lab results to a patient in simple language.
+
+Given this extracted report data:
+
+{JSON_DATA}
+
+Explain:
+1. Overall health condition.
+2. Each parameter in detail.
+3. Whether it is normal/high/low.
+4. What it means for the body.
+5. Possible causes if abnormal.
+6. Lifestyle suggestions.
+7. Whether medical consultation is urgently required.
+
+Keep language simple and patient-friendly.
+Do not use complex medical jargon.
+Always include explanation even if all values are normal.
+"""
+
+
+def _try_gemini_enhance(processed_params, risk_level, risk_reasoning):
+    """Enhance doctor's explanation using Gemini AI with the patient-friendly prompt."""
     if not (GEMINI_AVAILABLE and GEMINI_API_KEY):
         return None
     try:
         client = genaipkg.Client(api_key=GEMINI_API_KEY)
-        prompt = (
-            "You are an experienced clinical physician reviewing a patient's lab results. "
-            "Based on the following parameter data, write a 3-paragraph compassionate, educational "
-            "doctor's interpretation. Be specific about what each abnormal value means, likely causes, "
-            "and appropriate next steps. Avoid alarming language. End with a reassuring note.\n\n"
-            f"Lab Summary: {text_summary}\n\nParameters JSON:\n{params_json}\n\n"
-            "Write naturally, as if speaking directly to the patient."
-        )
+        # Build enriched JSON with all available metadata
+        json_data = json.dumps({
+            "risk_level": risk_level,
+            "risk_reasoning": risk_reasoning,
+            "parameters": [
+                {
+                    "name": p["name"],
+                    "value": p["value"],
+                    "unit": p["unit"],
+                    "status": p["status"],
+                    "normal_range": p.get("normal_range", ""),
+                    "category": p.get("category", ""),
+                    "interpretation": p.get("interpretation", ""),
+                }
+                for p in processed_params
+            ]
+        }, indent=2)
+        prompt = DOCTOR_EXPLANATION_PROMPT.replace("{JSON_DATA}", json_data)
         response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
         return response.text
     except Exception:
@@ -696,11 +729,17 @@ def answer_report_question(question, extracted_data, ai_explanation):
             client = genaipkg.Client(api_key=GEMINI_API_KEY)
             context = json.dumps(extracted_data, indent=2)
             prompt = (
-                f"You are a compassionate AI medical assistant. A patient is asking a question about their lab report.\n\n"
-                f"Report data:\n{context}\n\n"
-                f"Patient's question: {question}\n\n"
-                "Answer in 2–3 short paragraphs. Be educational and reassuring. "
-                "Remind them to consult their doctor at the end."
+                "You are an experienced medical doctor explaining lab results to a patient in simple language.\n\n"
+                f"Given this extracted report data:\n\n{context}\n\n"
+                f"The patient is asking: \"{question}\"\n\n"
+                "Answer their specific question clearly and in simple, patient-friendly language.\n"
+                "- Do not use complex medical jargon.\n"
+                "- Reference their actual values where relevant (normal/high/low).\n"
+                "- Explain what it means for their body.\n"
+                "- Give practical lifestyle suggestions if applicable.\n"
+                "- State clearly if they should urgently see a doctor.\n"
+                "- Always include an explanation even if all values are normal.\n"
+                "Keep the answer concise (2–3 paragraphs)."
             )
             response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
             return response.text + "\n\n*This is AI-generated educational information only. Please consult your doctor.*"
@@ -830,14 +869,8 @@ def analyze_medical_report(file_path):
     # Doctor's interpretation
     doctors_interpretation = _generate_doctors_interpretation(processed_params)
 
-    # Try Gemini enhancement
-    gemini_result = _try_gemini_enhance(
-        text_summary=f"Risk: {risk_level}. {risk_reasoning}",
-        params_json=json.dumps([
-            {"name": p["name"], "value": p["value"], "unit": p["unit"], "status": p["status"]}
-            for p in processed_params
-        ])
-    )
+    # Try Gemini enhancement with patient-friendly doctor prompt
+    gemini_result = _try_gemini_enhance(processed_params, risk_level, risk_reasoning)
     if gemini_result:
         doctors_interpretation = gemini_result
 
