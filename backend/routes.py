@@ -410,6 +410,51 @@ def serve_upload(filename):
     """Serve uploaded files."""
     return send_from_directory(UPLOAD_FOLDER, filename)
 
+# ─── General AI Chatbot ───────────────────────────────────────────────────────
+@app.route('/api/ai-chat', methods=['POST'])
+@token_required
+def ai_chat(current_user):
+    """General-purpose Gemini AI health chatbot for the website."""
+    from report_analyzer import _call_gemini
+    data = request.get_json()
+    message = (data.get('message') or '').strip()
+    history = data.get('history', [])  # list of {role, text} for multi-turn context
+
+    if not message:
+        return jsonify({'message': 'Message is required'}), 400
+
+    # Build conversation context from history (last 6 turns to keep prompt short)
+    context_lines = []
+    for turn in history[-6:]:
+        role = 'Patient' if turn.get('role') == 'user' else 'Dr. AI'
+        context_lines.append(f"{role}: {turn.get('text', '')}")
+    context = '\n'.join(context_lines)
+
+    prompt = (
+        "You are Dr. AI, a friendly and knowledgeable medical assistant on the Dr. Consultancy platform.\n"
+        "You help patients understand health topics, symptoms, medications, and medical reports.\n"
+        "You are warm, clear, and reassuring — like a trusted family doctor.\n\n"
+        "Important rules:\n"
+        "- Answer the patient's question fully and helpfully.\n"
+        "- Use plain, everyday language. Avoid heavy medical jargon.\n"
+        "- If something could be serious, say so calmly and recommend seeing a doctor.\n"
+        "- Never diagnose — always clarify you're providing general health information.\n"
+        "- If asked about medications, explain what they do but say a doctor should prescribe.\n"
+        "- Be concise but complete — 2 to 4 paragraphs is ideal.\n"
+        "- Always finish your response completely. Never cut off mid-sentence.\n\n"
+        + (f"Previous conversation:\n{context}\n\n" if context else "")
+        + f"Patient: {message}\n\nDr. AI:"
+    )
+
+    answer = _call_gemini(prompt, temperature=0.5)
+    if not answer:
+        answer = (
+            "I'm sorry, I'm having a little trouble connecting right now. "
+            "Please try again in a moment, or feel free to ask your doctor directly."
+        )
+
+    return jsonify({'answer': answer.strip()}), 200
+
 # ─── Doctor Chat: get patient list ───────────────────────────────────────────
 @app.route('/api/chat/patients', methods=['GET'])
 @token_required
