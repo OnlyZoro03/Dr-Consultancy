@@ -968,43 +968,54 @@ def answer_report_question(question, extracted_data, ai_explanation):
             "⚠️ *Always consult your doctor for personalised medical advice.*"
         )
 
-    # 6. Specific parameter keyword matching (order: longer phrases first)
+    # 6. Specific parameter keyword matching
+    # First: match ANY parameter name directly from the report against the question text
     keywords_map = [
         (['blood sugar', 'fasting sugar', 'fbs', 'rbs', 'sugar level', 'glucose', 'diabetes'], 'Glucose'),
-        (['hemoglobin', 'haemoglobin', 'hgb', 'anemia', 'anaemia', 'iron level'], 'Hemoglobin'),
+        (['hemoglobin', 'haemoglobin', 'hgb', 'anemia', 'anaemia'], 'Hemoglobin'),
         (['white blood cell', 'white cell', 'wbc', 'leukocyte', 'tlc', 'infection count'], 'WBC Count'),
         (['red blood cell', 'red cell', 'rbc', 'erythrocyte'], 'RBC Count'),
         (['platelet', 'plt', 'thrombocyte', 'clotting', 'bleeding time'], 'Platelets'),
-        (['blood pressure', 'hypertension', 'systolic', 'diastolic', 'bp level'], 'Systolic BP'),
-        (['heart rate', 'pulse rate', 'bpm', 'heartbeat', 'heart beat'], 'Heart Rate'),
-        (['ldl', 'bad cholesterol', 'low density'], 'LDL Cholesterol'),
-        (['hdl', 'good cholesterol', 'high density'], 'HDL Cholesterol'),
+        (['blood pressure', 'hypertension', 'systolic', 'diastolic', 'bp level', 'bp'], 'Systolic BP'),
+        (['heart rate', 'pulse rate', 'bpm', 'heartbeat', 'heart beat', 'pulse'], 'Heart Rate'),
+        (['ldl', 'bad cholesterol', 'low density lipoprotein'], 'LDL Cholesterol'),
+        (['hdl', 'good cholesterol', 'high density lipoprotein'], 'HDL Cholesterol'),
         (['total cholesterol', 'cholesterol level', 'cholesterol'], 'Total Cholesterol'),
-        (['triglyceride', 'tg level', 'trig'], 'Triglycerides'),
-        (['creatinine', 'kidney function', 'renal function', 'gfr'], 'Creatinine'),
-        (['blood urea', 'bun', 'urea level'], 'BUN'),
-        (['sgpt', 'alt level', 'liver enzyme', 'liver function'], 'ALT'),
-        (['sgot', 'ast level'], 'AST'),
+        (['triglyceride', 'tg level', 'trig', 'triglycerides'], 'Triglycerides'),
+        (['creatinine', 'renal function'], 'Creatinine'),
+        (['blood urea', 'bun', 'urea level', 'urea'], 'BUN'),
+        (['sgpt', 'alt', 'liver enzyme', 'liver function', 'alanine'], 'ALT'),
+        (['sgot', 'ast', 'aspartate'], 'AST'),
         (['bilirubin', 'jaundice'], 'Total Bilirubin'),
-        (['thyroid', 'tsh level', 't3 ', 't4 '], 'TSH'),
-        (['hba1c', 'a1c', 'glycated', 'long term sugar', '3 month sugar'], 'HbA1c'),
-        (['oxygen', 'spo2', 'o2 sat', 'saturation', 'breathing difficulty'], 'Oxygen Saturation'),
+        (['thyroid', 'tsh', 't3', 't4', 'thyroxine'], 'TSH'),
+        (['hba1c', 'a1c', 'glycated', 'long term sugar', '3 month sugar', 'haemoglobin a1c'], 'HbA1c'),
+        (['oxygen', 'spo2', 'o2 sat', 'saturation', 'breathing', 'oxygen saturation'], 'Oxygen Saturation'),
         (['temperature', 'fever', 'body temp'], 'Temperature'),
-        (['sodium', 'na+', 'salt level'], 'Sodium'),
-        (['potassium', 'k+', 'electrolyte'], 'Potassium'),
-        (['vitamin d', 'vit d', '25-oh', 'calcidiol', 'vitamin d3', 'bone vitamin'], 'Vitamin D'),
-        (['serum iron', 'iron level', 's. iron', ' iron ', 'iron store'], 'Serum Iron'),
-        (['ferritin', 'serum ferritin', 'iron store', 'iron depot'], 'Ferritin'),
-        (['egfr', 'gfr', 'glomerular filtration', 'kidney filter'], 'eGFR'),
+        (['sodium', 'salt level'], 'Sodium'),
+        (['potassium', 'electrolyte'], 'Potassium'),
+        (['vitamin d', 'vit d', '25-oh', 'calcidiol', 'vitamin d3'], 'Vitamin D'),
+        (['serum iron', 'iron level', 'iron store', 'iron deficiency'], 'Serum Iron'),
+        (['ferritin', 'serum ferritin'], 'Ferritin'),
+        (['egfr', 'glomerular filtration', 'kidney filter', 'kidney function', 'kidney'], 'eGFR'),
         (['uric acid', 'urate', 'gout', 'purine'], 'Uric Acid'),
-        (['crp', 'c-reactive', 'c reactive', 'inflammation marker', 'inflammatory marker'], 'CRP'),
+        (['crp', 'c-reactive', 'c reactive', 'inflammation marker', 'inflammation', 'inflammatory'], 'CRP'),
+        (['mcv', 'mean corpuscular', 'cell size'], 'MCV'),
+        (['hematocrit', 'haematocrit', 'pcv', 'packed cell', 'hct'], 'Hematocrit'),
     ]
 
     matched_param = None
+    # First try hardcoded aliases
     for keywords, param_name in keywords_map:
         if any(kw in question_lower for kw in keywords):
             matched_param = next((p for p in extracted_data if p['name'] == param_name), None)
             if matched_param:
+                break
+
+    # If no alias match, try matching any actual param name from THIS report directly
+    if not matched_param:
+        for p in extracted_data:
+            if p['name'].lower() in question_lower or p['name'].lower().split()[0] in question_lower:
+                matched_param = p
                 break
 
     if matched_param:
@@ -1014,7 +1025,9 @@ def answer_report_question(question, extracted_data, ai_explanation):
         )
 
     # 7. 'What should I do?' / 'Next steps?'
-    if any(w in question_lower for w in ['do next', 'what should', 'next step', 'what to do', 'action', 'recommend', 'suggest']):
+    if any(w in question_lower for w in ['do next', 'next step', 'what to do', 'action', 'suggest', 'advise',
+                                          'advice', 'help me', 'guide me', 'how to improve', 'how can i improve',
+                                          'how do i improve', 'what can i do']):
         if not abnormal:
             return (
                 "Since everything looks good in your report, your next steps are actually pretty simple — just keep doing what you're doing:\n\n"
@@ -1029,7 +1042,7 @@ def answer_report_question(question, extracted_data, ai_explanation):
             specific = '\n'.join(f"• Ask your doctor specifically about your {p['name']} — it came in {p['status'].lower()} at {p['value']} {p['unit']}" for p in abnormal[:3])
             return (
                 f"Given that you have {len(abnormal)} value{'s' if len(abnormal) > 1 else ''} outside the healthy range, here's what I'd suggest doing:\n\n"
-                f"• Book an appointment with your doctor as soon as you can — ideally within the next 1–2 weeks\n"
+                "• Book an appointment with your doctor as soon as you can — ideally within the next 1–2 weeks\n"
                 f"{specific}\n"
                 "• Bring this report with you — your doctor needs to see the actual numbers\n"
                 "• Don't try to treat this yourself based on what you read online\n"
@@ -1037,23 +1050,138 @@ def answer_report_question(question, extracted_data, ai_explanation):
                 "⚠️ *Always consult your doctor for personalised medical advice.*"
             )
 
-    # 8. Final catch-all — give a useful specific summary
-    total = len(extracted_data)
-    abn_count = len(abnormal)
-    bord_count = len(borderline)
-    norm_count = len(normal)
-    summary = f"I've gone through your report and found {total} value{'s' if total != 1 else ''}. "
-    if abn_count:
-        summary += f"{abn_count} of {'them are' if abn_count > 1 else 'them is'} outside the healthy range — specifically {', '.join(p['name'] for p in abnormal)}. "
-    if bord_count:
-        summary += f"{bord_count} {'are' if bord_count > 1 else 'is'} sitting on the borderline and worth watching. "
-    if norm_count:
-        summary += f"The good news is {norm_count} {'are' if norm_count > 1 else 'is'} completely normal. "
-    summary += (
-        "\n\nFeel free to ask me anything — try something like 'What should I be worried about?', "
-        "'What should I eat?', 'Explain my risk level', or ask about a specific test like 'Tell me about my glucose'."
+    # 8. Cause / reason questions
+    if any(w in question_lower for w in ['why', 'cause', 'reason', 'what caused', 'how did', 'result from',
+                                          'because', 'due to', 'what makes', 'trigger']):
+        focus = abnormal + borderline
+        if not focus:
+            return (
+                "Your values are all within the normal range, so there's no specific cause to investigate right now. "
+                "That's actually great — it means your diet, lifestyle, and overall health are on track.\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
+            )
+        parts = []
+        for p in focus[:3]:
+            rng = NORMAL_RANGES.get(p['name'], {})
+            direction = 'low' if p['status'] == 'Low' else 'high' if p['status'] == 'High' else 'borderline'
+            causes = rng.get('low_causes' if direction == 'low' else 'high_causes', [])
+            if causes:
+                parts.append(f"**{p['name']}** is {direction} ({p['value']} {p['unit']}). Common reasons: {', '.join(causes[:3])}.")
+        if parts:
+            causes_text = '\n\n'.join(parts)
+            return (
+                f"Good question. Here's what could be behind the values that need attention in your report:\n\n{causes_text}\n\n"
+                "Keep in mind that a single lab result rarely tells the full story — your doctor will factor in your symptoms, "
+                "medical history, and lifestyle before drawing any conclusions. These causes are just the most common possibilities.\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
+            )
+
+    # 9. Symptoms questions
+    if any(w in question_lower for w in ['symptom', 'feel', 'feeling', 'sign', 'experience', 'notice',
+                                          'fatigue', 'tired', 'pain', 'dizzy', 'weak', 'weakness']):
+        focus = abnormal + borderline
+        if not focus:
+            return (
+                "Since all your values are normal, you're unlikely to be experiencing symptoms directly related to these lab results. "
+                "If you are feeling unwell, it could be due to something not captured in this particular test — worth mentioning to your doctor.\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
+            )
+        parts = []
+        for p in focus[:3]:
+            rng = NORMAL_RANGES.get(p['name'], {})
+            direction = 'low' if p['status'] == 'Low' else 'high'
+            symptoms = rng.get('symptoms_low' if direction == 'low' else 'symptoms_high', [])
+            if symptoms:
+                parts.append(f"With {p['name']} being {p['status'].lower()}, you might notice: {', '.join(symptoms[:4])}.")
+        if parts:
+            return (
+                "Based on the values in your report that are outside the healthy range, here are the symptoms commonly associated with them:\n\n"
+                + '\n\n'.join(parts) +
+                "\n\nIf you're experiencing any of these, please mention them to your doctor — they help paint a fuller picture.\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
+            )
+
+    # 10. Supplement / medication / treatment questions
+    if any(w in question_lower for w in ['supplement', 'vitamin', 'medicine', 'medication', 'tablet', 'pill',
+                                          'treatment', 'remedy', 'cure', 'fix', 'improve', 'boost', 'increase', 'decrease', 'lower', 'raise']):
+        if not abnormal and not borderline:
+            return (
+                "Your values all look healthy, so there's nothing specific that needs supplementing or treating right now. "
+                "A balanced diet, regular exercise, and good sleep are the best maintenance plan.\n\n"
+                "That said, always check with your doctor before starting any new supplements — even vitamins can interact with conditions or medications.\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
+            )
+        plan = _generate_wellness_plan(extracted_data, 'Medium')
+        parts = []
+        for p in (abnormal + borderline)[:3]:
+            rng = NORMAL_RANGES.get(p['name'], {})
+            direction = 'low' if p['status'] in ('Low', 'Borderline') and p['value'] <= rng.get('min', 0) else 'high'
+            causes = rng.get('low_causes' if direction == 'low' else 'high_causes', [])
+            if p['name'] == 'Hemoglobin' or p['name'] == 'Serum Iron' or p['name'] == 'Ferritin':
+                parts.append(f"• For low {p['name']}: iron supplements (after doctor confirmation), iron-rich foods like spinach, lentils, red meat")
+            elif p['name'] == 'Vitamin D':
+                parts.append(f"• For {p['name']}: Vitamin D3 supplements (ask your doctor for dosage), sunlight exposure, fatty fish")
+            elif p['name'] in ('Glucose', 'HbA1c'):
+                parts.append(f"• For {p['name']}: reduce sugar and refined carbs, increase fibre, regular walking after meals")
+            elif p['name'] in ('Total Cholesterol', 'LDL Cholesterol', 'Triglycerides'):
+                parts.append(f"• For {p['name']}: reduce saturated fat, increase omega-3 (fish, walnuts), oats and soluble fibre")
+            elif causes:
+                parts.append(f"• For {p['name']}: discuss treatment options with your doctor — common causes include {causes[0].lower()}")
+        treat_text = '\n'.join(parts) if parts else "Your doctor will guide you on the right treatment after a proper examination."
+        return (
+            f"Here are some general approaches related to the values in your report that need attention:\n\n{treat_text}\n\n"
+            "Please do not self-prescribe supplements or medications based on this alone — your doctor needs to confirm "
+            "the right dosage and check for any interactions with other conditions or medications you may have.\n\n"
+            "⚠️ *Always consult your doctor for personalised medical advice.*"
+        )
+
+    # 11. Doctor visit / appointment questions
+    if any(w in question_lower for w in ['doctor', 'hospital', 'specialist', 'appointment', 'visit', 'consult',
+                                          'see a doctor', 'go to', 'emergency', 'urgent', 'immediately', 'when should']):
+        if not abnormal:
+            return (
+                "Based on your current report, there's no urgent need to rush to a doctor — everything looks within normal range. "
+                "However, it's always good practice to have a routine annual check-up to track your health over time.\n\n"
+                "If you're experiencing symptoms that concern you even with this normal report, don't hesitate to book an appointment "
+                "— your doctor will take into account things beyond just these numbers.\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
+            )
+        urgency = "soon (within the next 1–2 weeks)" if len(abnormal) == 1 else "as soon as possible (within the next few days)"
+        abnormal_summary = ', '.join(f"{p['name']} ({p['status'].lower()}: {p['value']} {p['unit']})" for p in abnormal)
+        return (
+            f"Given your results, I'd recommend seeing your doctor {urgency}. "
+            f"Specifically, you'll want to discuss: {abnormal_summary}.\n\n"
+            "When you go:\n"
+            "• Bring this report (or the original lab printout)\n"
+            "• Mention any symptoms you've been experiencing\n"
+            "• Ask your doctor what follow-up tests, if any, are needed\n"
+            "• Don't leave without understanding what your next step is\n\n"
+            "⚠️ *Always consult your doctor for personalised medical advice.*"
+        )
+
+    # 12. Intelligent catch-all — always give a contextual answer using actual report data
+    focus_params = abnormal + borderline if (abnormal or borderline) else normal[:3]
+    response_parts = []
+
+    # Lead with the most relevant parameter explanations
+    for p in focus_params[:2]:
+        response_parts.append(_build_parameter_explanation(p))
+
+    if abnormal or borderline:
+        response_parts.append(
+            f"\nOverall, your report has {len(abnormal)} value{'s' if len(abnormal) != 1 else ''} outside the healthy range"
+            + (f" and {len(borderline)} borderline" if borderline else "") +
+            ". I'd recommend discussing these with your doctor and also checking the Wellness Plan tab for personalised diet and exercise tips."
+        )
+    else:
+        response_parts.append(
+            "\nThe good news is everything in your report looks normal. Keep up your healthy habits!"
+        )
+
+    return (
+        '\n\n'.join(response_parts) +
+        "\n\n⚠️ *Always consult your doctor for personalised medical advice.*"
     )
-    return summary + "\n\n⚠️ *Always consult your doctor for personalised medical advice.*"
 
 
 def analyze_medical_report(file_path):
