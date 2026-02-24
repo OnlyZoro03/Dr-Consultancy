@@ -4,7 +4,7 @@ import api from '../services/api';
 import {
     FaFileMedical, FaUpload, FaMicroscope, FaExclamationCircle,
     FaCheckCircle, FaChartBar, FaStethoscope, FaInfoCircle, FaArrowLeft,
-    FaCamera, FaTimes, FaTrash, FaUserMd, FaShieldAlt,
+    FaCamera, FaTimes, FaTrash, FaUserMd, FaShieldAlt, FaEye,
     FaAppleAlt, FaRunning, FaTint, FaBed, FaHeartbeat,
     FaRobot, FaPaperPlane, FaLeaf, FaBrain, FaExclamationTriangle,
     FaThumbsUp, FaFlask, FaArrowRight
@@ -206,6 +206,16 @@ const ReportAnalysis = () => {
     ]);
     const [chatInput, setChatInput] = useState('');
     const [chatLoading, setChatLoading] = useState(false);
+    const [previewFile, setPreviewFile] = useState(null); // { url, name, isPdf }
+
+    const openPreview = (file) => {
+        const url = URL.createObjectURL(file);
+        setPreviewFile({ url, name: file.name, isPdf: file.type === 'application/pdf' });
+    };
+    const closePreview = () => {
+        if (previewFile) URL.revokeObjectURL(previewFile.url);
+        setPreviewFile(null);
+    };
     const chatEndRef = useRef(null);
 
     // Active section tab for analysis view
@@ -350,6 +360,56 @@ const ReportAnalysis = () => {
     ];
 
     return (
+        <>
+        {/* ── File Preview Modal ── */}
+        {previewFile && (
+            <div onClick={closePreview} style={{
+                position: 'fixed', inset: 0, zIndex: 1000,
+                background: 'rgba(0,0,0,0.75)', display: 'flex',
+                alignItems: 'center', justifyContent: 'center', padding: '1.5rem'
+            }}>
+                <div onClick={e => e.stopPropagation()} style={{
+                    background: 'white', borderRadius: '16px', overflow: 'hidden',
+                    maxWidth: '90vw', maxHeight: '90vh', width: '800px',
+                    display: 'flex', flexDirection: 'column', boxShadow: '0 25px 60px rgba(0,0,0,0.4)'
+                }}>
+                    {/* Modal header */}
+                    <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '0.85rem 1.25rem', borderBottom: '1px solid #e2e8f0',
+                        background: '#f8fafc'
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <FaFileMedical style={{ color: '#3b82f6' }} />
+                            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#334155', maxWidth: '500px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {previewFile.name}
+                            </span>
+                        </div>
+                        <button onClick={closePreview} style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            color: '#64748b', fontSize: '1.1rem', display: 'flex', alignItems: 'center'
+                        }}><FaTimes /></button>
+                    </div>
+                    {/* Content */}
+                    <div style={{ flex: 1, overflow: 'auto', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '400px' }}>
+                        {previewFile.isPdf ? (
+                            <iframe
+                                src={previewFile.url}
+                                title={previewFile.name}
+                                style={{ width: '100%', height: '75vh', border: 'none' }}
+                            />
+                        ) : (
+                            <img
+                                src={previewFile.url}
+                                alt={previewFile.name}
+                                style={{ maxWidth: '100%', maxHeight: '75vh', objectFit: 'contain', borderRadius: '8px' }}
+                            />
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+
         <div className="app-layout" style={{ background: 'linear-gradient(135deg, #f0f9ff 0%, #f8fafc 100%)', minHeight: '100vh' }}>
             {/* Navbar */}
             <nav className="navbar" style={{ background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(12px)', borderBottom: '1px solid #e2e8f0' }}>
@@ -393,6 +453,7 @@ const ReportAnalysis = () => {
                                                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.5rem', background: '#f1f5f9', borderRadius: '8px', marginBottom: '0.3rem' }}>
                                                         <FaFileMedical style={{ color: '#3b82f6', flexShrink: 0, fontSize: '0.8rem' }} />
                                                         <span style={{ fontSize: '0.72rem', flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.name}</span>
+                                                        <FaEye onClick={() => openPreview(f)} style={{ color: '#3b82f6', cursor: 'pointer', fontSize: '0.72rem', flexShrink: 0 }} title="View file" />
                                                         <FaTrash onClick={() => removeFile(i)} style={{ color: '#ef4444', cursor: 'pointer', fontSize: '0.68rem' }} />
                                                     </div>
                                                 ))}
@@ -818,6 +879,7 @@ const ReportAnalysis = () => {
                 </div>
             </div>
         </div>
+        </>
     );
 };
 
