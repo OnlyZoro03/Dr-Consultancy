@@ -280,6 +280,62 @@ NORMAL_RANGES = {
         "symptoms_low": ["Shortness of breath", "Confusion", "Cyanosis (blue lips/fingernails)", "Rapid shallow breathing", "Anxiety"],
         "symptoms_high": [],
         "importance": "critical"
+    },
+    # --- Vitamins & Minerals ---
+    "Vitamin D": {
+        "min": 30, "max": 100, "unit": "ng/mL", "category": "Vitamins & Minerals",
+        "meaning": "25-hydroxyvitamin D — essential for bone health, immune function, and calcium absorption.",
+        "low_causes": ["Inadequate sun exposure", "Poor dietary intake", "Malabsorption disorders", "Liver or kidney disease", "Dark skin pigmentation"],
+        "high_causes": ["Excessive vitamin D supplementation", "Granulomatous diseases (sarcoidosis)"],
+        "symptoms_low": ["Bone pain and muscle weakness", "Fatigue", "Frequent infections", "Depression", "Hair loss"],
+        "symptoms_high": ["Nausea and vomiting", "Weakness", "Frequent urination", "Kidney stones", "Confusion"],
+        "importance": "high"
+    },
+    "Serum Iron": {
+        "min": 60, "max": 170, "unit": "mcg/dL", "category": "Vitamins & Minerals",
+        "meaning": "Amount of iron circulating in the blood — reflects iron stores and transport capacity.",
+        "low_causes": ["Iron deficiency anemia", "Chronic blood loss", "Poor dietary iron intake", "Malabsorption", "Pregnancy"],
+        "high_causes": ["Hemochromatosis (iron overload)", "Liver disease", "Repeated blood transfusions", "Excessive iron supplementation"],
+        "symptoms_low": ["Fatigue and weakness", "Pale skin", "Brittle nails", "Cold hands and feet", "Shortness of breath"],
+        "symptoms_high": ["Joint pain", "Fatigue", "Liver enlargement", "Skin bronzing", "Heart problems"],
+        "importance": "high"
+    },
+    "Ferritin": {
+        "min": 12, "max": 300, "unit": "ng/mL", "category": "Vitamins & Minerals",
+        "meaning": "Protein that stores iron in cells — the most accurate marker of total iron body stores.",
+        "low_causes": ["Iron deficiency anemia", "Chronic blood loss", "Poor dietary intake"],
+        "high_causes": ["Hemochromatosis", "Liver disease", "Chronic inflammation", "Cancer", "Frequent blood transfusions"],
+        "symptoms_low": ["Fatigue", "Hair loss", "Restless leg syndrome", "Brittle nails", "Difficulty concentrating"],
+        "symptoms_high": ["Fatigue", "Joint pain", "Abdominal pain", "Heart palpitations"],
+        "importance": "high"
+    },
+    # --- Renal & Inflammatory Markers ---
+    "eGFR": {
+        "min": 60, "max": 120, "unit": "mL/min/1.73m²", "category": "Kidney Function",
+        "meaning": "Estimated Glomerular Filtration Rate — best overall measure of how well your kidneys are filtering blood.",
+        "low_causes": ["Chronic kidney disease", "Diabetes", "Hypertension", "Autoimmune kidney disease", "Aging"],
+        "high_causes": [],
+        "symptoms_low": ["Swelling in legs/ankles", "Fatigue", "Decreased urine output", "Nausea", "Shortness of breath"],
+        "symptoms_high": [],
+        "importance": "critical"
+    },
+    "Uric Acid": {
+        "min": 3.4, "max": 7.0, "unit": "mg/dL", "category": "Metabolic Panel",
+        "meaning": "Breakdown product of purines from food and cell turnover — elevated levels can cause gout and kidney stones.",
+        "low_causes": ["Low purine diet", "Certain medications (allopurinol)", "Liver disease"],
+        "high_causes": ["Gout", "High purine diet (red meat, seafood, alcohol)", "Kidney disease", "Obesity", "Diuretic medications"],
+        "symptoms_low": [],
+        "symptoms_high": ["Sudden severe joint pain (especially big toe)", "Joint swelling and redness", "Kidney stones", "Gout attacks"],
+        "importance": "high"
+    },
+    "CRP": {
+        "min": 0, "max": 10, "unit": "mg/L", "category": "Inflammatory Markers",
+        "meaning": "C-Reactive Protein — produced by the liver in response to inflammation; elevated values signal active infection or inflammatory disease.",
+        "low_causes": [],
+        "high_causes": ["Bacterial infection", "Autoimmune diseases (lupus, rheumatoid arthritis)", "Inflammatory bowel disease", "Recent surgery or injury", "Cardiovascular disease risk"],
+        "symptoms_low": [],
+        "symptoms_high": ["Fever", "Fatigue", "Joint pain and swelling", "Muscle aches", "Redness or warmth at inflamed site"],
+        "importance": "high"
     }
 }
 
@@ -353,6 +409,24 @@ PARAMETER_PATTERNS = {
     ],
     "Oxygen Saturation": [
         r"(?:O2\s*Sat|SpO2|Oxygen\s*Sat)\s*[:\-]?\s*([\d\.]+)"
+    ],
+    "Vitamin D": [
+        r"(?:Vitamin\s*D(?:\s*25|3)?|25[\-\s]*OH|Calcidiol)\s*[:\-]?\s*([\d\.]+)"
+    ],
+    "Serum Iron": [
+        r"(?:Serum\s*Iron|Iron\s*Level|S\.?\s*Iron|Fe\b)\s*[:\-]?\s*([\d\.]+)"
+    ],
+    "Ferritin": [
+        r"(?:Ferritin|Serum\s*Ferritin)\s*[:\-]?\s*([\d\.]+)"
+    ],
+    "eGFR": [
+        r"(?:eGFR|GFR|Glomerular\s*Filtration)\s*[:\-]?\s*([\d\.]+)"
+    ],
+    "Uric Acid": [
+        r"(?:Uric\s*Acid|Serum\s*Urate|Urate)\s*[:\-]?\s*([\d\.]+)"
+    ],
+    "CRP": [
+        r"(?:CRP|C[\-\s]*Reactive\s*Protein|hs[\-\s]*CRP)\s*[:\-]?\s*([\d\.]+)"
     ],
 }
 
@@ -885,6 +959,12 @@ def answer_report_question(question, extracted_data, ai_explanation):
         (['temperature', 'fever', 'body temp'], 'Temperature'),
         (['sodium', 'na+', 'salt level'], 'Sodium'),
         (['potassium', 'k+', 'electrolyte'], 'Potassium'),
+        (['vitamin d', 'vit d', '25-oh', 'calcidiol', 'vitamin d3', 'bone vitamin'], 'Vitamin D'),
+        (['serum iron', 'iron level', 's. iron', ' iron ', 'iron store'], 'Serum Iron'),
+        (['ferritin', 'serum ferritin', 'iron store', 'iron depot'], 'Ferritin'),
+        (['egfr', 'gfr', 'glomerular filtration', 'kidney filter'], 'eGFR'),
+        (['uric acid', 'urate', 'gout', 'purine'], 'Uric Acid'),
+        (['crp', 'c-reactive', 'c reactive', 'inflammation marker', 'inflammatory marker'], 'CRP'),
     ]
 
     matched_param = None
