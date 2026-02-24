@@ -240,9 +240,27 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
   };
 
+  if (loading) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        height: '100vh', flexDirection: 'column', gap: '16px',
+        background: '#f8fafc'
+      }}>
+        <div style={{
+          width: '48px', height: '48px', border: '4px solid #e2e8f0',
+          borderTop: '4px solid #4f46e5', borderRadius: '50%',
+          animation: 'spin 0.8s linear infinite'
+        }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <p style={{ color: '#64748b', fontSize: '14px', margin: 0 }}>Loading…</p>
+      </div>
+    );
+  }
+
   return (
     <AuthContext.Provider value={{ user, login, loginWithGoogle, register, updateProfile, logout, loading }}>
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 };
