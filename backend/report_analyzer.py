@@ -22,30 +22,54 @@ try:
 except ImportError:
     GEMINI_AVAILABLE = False
 
-# Hard-coded fallback so key is ALWAYS available even if .env is missing
-_HARDCODED_KEY = 'AIzaSyAapD-tQ9hJZKg1WNUAKpYHq9-XnESyyf0'
+# Hard-coded fallback removed — key was flagged as leaked after GitHub push.
+# Set GEMINI_API_KEY in backend/.env and NEVER commit that file.
+_HARDCODED_KEY = ''
 
 def _get_gemini_key():
-    """Always returns the freshest key — env var takes priority over hard-coded."""
-    return os.environ.get('GEMINI_API_KEY', '') or _HARDCODED_KEY
+    """Read API key from environment only (never from hardcoded string)."""
+    return os.environ.get('GEMINI_API_KEY', '')
 
 
 def _call_gemini(prompt, temperature=0.4):
-    """Call Gemini and return text, or None on failure."""
+    """Call Gemini with multi-model fallback. Each model has a separate free-tier quota."""
     if not GEMINI_AVAILABLE:
         return None
-    try:
-        key = _get_gemini_key()
-        genai_sdk.configure(api_key=key)
-        model = genai_sdk.GenerativeModel(
-            'gemini-2.0-flash',
-            generation_config={'temperature': temperature, 'max_output_tokens': 1024}
-        )
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        print(f'[Gemini] API call failed: {e}')
+
+    # Try models in order — if one hits quota, the next one is attempted
+    _MODELS = [
+        'gemini-2.0-flash-lite',   # lightest, highest free-tier RPM
+        'gemini-1.5-flash-8b',     # fast small model, separate quota
+        'gemini-1.5-flash',        # reliable fallback
+        'gemini-2.0-flash',        # original — may hit daily limit
+    ]
+
+    key = _get_gemini_key()
+    if not key:
+        print('[Gemini] No API key found. Set GEMINI_API_KEY in backend/.env')
         return None
+    genai_sdk.configure(api_key=key)
+    gen_cfg = {'temperature': temperature, 'max_output_tokens': 1024}
+
+    for model_name in _MODELS:
+        try:
+            model = genai_sdk.GenerativeModel(model_name, generation_config=gen_cfg)
+            response = model.generate_content(prompt)
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            err = str(e)
+            if '403' in err or 'leaked' in err.lower() or 'invalid' in err.lower():
+                print(f'[Gemini] API key is invalid or leaked. Please generate a new key at https://aistudio.google.com/')
+                return None  # No point trying other models with a bad key
+            if '429' in err or 'quota' in err.lower() or 'rate' in err.lower():
+                print(f'[Gemini] {model_name} quota exceeded, trying next model...')
+                continue
+            print(f'[Gemini] {model_name} failed: {e}')
+            continue
+
+    print('[Gemini] All models exhausted — using rule-based fallback.')
+    return None
 
 # ─── Comprehensive Medical Reference Ranges ───────────────────────────────────
 NORMAL_RANGES = {
