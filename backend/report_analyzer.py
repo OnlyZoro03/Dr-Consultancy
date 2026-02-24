@@ -484,7 +484,7 @@ def classify_parameter(name, value):
 
 
 def _build_parameter_explanation(p):
-    """Build a multi-line, doctor-style explanation for a single parameter."""
+    """Build a warm, human-friendly explanation for a single parameter."""
     name, value, unit, status = p["name"], p["value"], p["unit"], p["status"]
     rng = NORMAL_RANGES.get(name, {})
     meaning = rng.get("meaning", "")
@@ -495,50 +495,50 @@ def _build_parameter_explanation(p):
 
     if status == "Normal":
         lines.append(
-            f"Your {name} is {value} {unit}, which is within the healthy reference range of {normal_range} {unit}. "
-            f"This is an encouraging result. {meaning} "
-            f"A normal {name} value indicates that this aspect of your health is well-maintained and functioning optimally."
+            f"Your {name} came in at {value} {unit}, which is right where we want it to be (the healthy range is {normal_range} {unit}). "
+            f"{meaning} "
+            f"This is a good result — it tells us this part of your health is working well."
         )
     elif status == "Borderline":
         direction = "low" if value <= lo else "high"
         lines.append(
-            f"Your {name} is {value} {unit}, which is borderline {direction} (reference range: {normal_range} {unit}). "
+            f"Your {name} is {value} {unit}, which is just slightly {direction} of the ideal range ({normal_range} {unit}). "
             f"{meaning} "
-            f"While not critically abnormal, this reading warrants monitoring. "
-            f"Lifestyle adjustments may help bring this value further into the optimal range."
+            f"It's not something to panic about, but it is worth keeping an eye on. "
+            f"A few lifestyle tweaks could help bring this back into a comfortable range."
         )
         causes = rng.get("low_causes" if direction == "low" else "high_causes", [])
         if causes:
-            lines.append(f"Possible contributing factors include: {', '.join(causes[:3])}.")
+            lines.append(f"The most common reasons for this include: {', '.join(causes[:3])}.")
     elif status == "Low":
         lines.append(
             f"Your {name} is {value} {unit}, which is below the healthy range of {normal_range} {unit}. "
             f"{meaning} "
-            f"A low {name} can indicate an underlying condition that should be evaluated by your doctor."
+            f"A low {name} is something your doctor should have a look at — it can indicate an underlying condition that's very treatable when caught early."
         )
         causes = rng.get("low_causes", [])
         symptoms = rng.get("symptoms_low", [])
         if causes:
-            lines.append(f"Common causes of low {name} include: {', '.join(causes[:4])}.")
+            lines.append(f"Common reasons why {name} drops low include: {', '.join(causes[:4])}.")
         if symptoms:
             lines.append(
-                f"You may experience symptoms such as: {', '.join(symptoms[:4])}. "
-                "If you are experiencing these symptoms, please seek medical attention."
+                f"Some people with low {name} notice things like: {', '.join(symptoms[:4])}. "
+                "If any of that sounds familiar, please mention it to your doctor."
             )
     elif status == "High":
         lines.append(
-            f"Your {name} is {value} {unit}, which is elevated above the healthy range of {normal_range} {unit}. "
+            f"Your {name} came in at {value} {unit}, which is above the healthy range of {normal_range} {unit}. "
             f"{meaning} "
-            f"An elevated {name} can indicate various conditions that merit clinical evaluation."
+            f"An elevated {name} is worth investigating — in many cases it can be brought down with the right changes."
         )
         causes = rng.get("high_causes", [])
         symptoms = rng.get("symptoms_high", [])
         if causes:
-            lines.append(f"Possible causes of high {name} include: {', '.join(causes[:4])}.")
+            lines.append(f"Common reasons for a high {name} include: {', '.join(causes[:4])}.")
         if symptoms:
             lines.append(
-                f"Watch for symptoms including: {', '.join(symptoms[:4])}. "
-                "If you have any of these, please consult your healthcare provider promptly."
+                f"Keep an eye out for: {', '.join(symptoms[:4])}. "
+                "If you're experiencing any of these, it's a good reason to see your doctor soon."
             )
 
     return " ".join(lines)
@@ -608,25 +608,48 @@ def _generate_clinical_summary(processed_params, risk_level, risk_reasoning):
 
 
 def _generate_doctors_interpretation(processed_params):
-    """Generate detailed, paragraph-form AI doctor interpretation for all parameters."""
+    """Generate warm, human-friendly doctor interpretation for all parameters."""
     if not processed_params:
         return (
-            "Based on the uploaded report, we were unable to extract structured lab values for detailed interpretation. "
-            "Please ensure the report is clearly scanned or is in PDF format with readable text. "
-            "Once parameters are extracted, this section will provide a comprehensive explanation of each finding."
+            "I wasn't able to pull out specific numbers from your report this time. "
+            "This can happen if the image is a bit blurry or the text format isn't quite right. "
+            "Try uploading a clearer scan or a PDF version of your report, and I'll give you a full breakdown."
         )
 
-    lines = [
-        "Based on a thorough review of your lab findings, here is a detailed clinical interpretation:\n"
-    ]
+    abnormal = [p for p in processed_params if p["status"] in ("High", "Low")]
+    borderline = [p for p in processed_params if p["status"] == "Borderline"]
+    normal = [p for p in processed_params if p["status"] == "Normal"]
+
+    if not abnormal and not borderline:
+        opening = (
+            f"I've had a good look through your results and I'm pleased to tell you — everything looks healthy. "
+            f"All {len(normal)} values we picked up are sitting comfortably within their normal ranges. "
+            "That's genuinely good news and a sign that your body is doing well right now.\n"
+        )
+    elif len(abnormal) >= 2:
+        opening = (
+            f"I've reviewed your report carefully. There are a few things here that need your attention — "
+            f"{len(abnormal)} of your values are outside the healthy range. I'll walk you through each one below, "
+            "so you know exactly what they mean and what to do about them.\n"
+        )
+    else:
+        opening = (
+            f"Your report is largely encouraging — most of your values look fine. "
+            f"There {'is one value' if len(abnormal) == 1 else f'are {len(abnormal)} values'} that "
+            "we should keep an eye on, which I'll explain in detail below.\n"
+        )
+
+    lines = [opening]
     for p in processed_params:
         explanation = _build_parameter_explanation(p)
-        lines.append(f"🔬 {p['name']}: {explanation}")
+        emoji = "✅" if p["status"] == "Normal" else ("⚠️" if p["status"] == "Borderline" else "🔴")
+        lines.append(f"{emoji} {p['name']}: {explanation}")
 
     lines.append(
-        "\nIf any of the above values are abnormal, do not panic. Many parameters can be influenced by "
-        "diet, hydration, recent illness, or medication. Your doctor will interpret these results in the "
-        "context of your complete medical history and physical examination before recommending any action."
+        "\nOne last thing — please don't try to interpret these results in isolation. "
+        "Lab values are just one piece of the puzzle. Your doctor will look at these numbers alongside "
+        "how you're feeling, your medical history, and any medications you're taking before deciding on next steps. "
+        "If anything is worrying you, don't hesitate to pick up the phone and call them."
     )
     return "\n\n".join(lines)
 
@@ -769,24 +792,29 @@ def _generate_wellness_plan(processed_params, risk_level):
 
 # ─── Patient-Friendly Doctor Explanation Prompt ──────────────────────────────
 DOCTOR_EXPLANATION_PROMPT = """
-You are an experienced medical doctor explaining lab results to a patient in simple language.
+You are a warm, caring family doctor writing a personal note to your patient after reviewing their lab report.
+Your tone should feel like a conversation between a trusted doctor and their patient — reassuring, clear, and human.
 
-Given this extracted report data:
-
+Report data:
 {JSON_DATA}
 
-Explain:
-1. Overall health condition.
-2. Each parameter in detail.
-3. Whether it is normal/high/low.
-4. What it means for the body.
-5. Possible causes if abnormal.
-6. Lifestyle suggestions.
-7. Whether medical consultation is urgently required.
+Write your doctor's note following these rules:
+1. Start with a warm, personal opening (e.g. "I've had a good look through your results and here's what I found...")
+2. Briefly describe the overall picture in one sentence — good, mixed, or needs attention.
+3. For EACH parameter:
+   - Say the name in plain English (not just the abbreviation)
+   - Say whether it's normal, a little low/high, or needs attention — in everyday words
+   - Explain what that number means FOR THEIR BODY (e.g. "This tells us how your kidneys are doing")
+   - If abnormal, briefly explain the most likely everyday reason and what they can do
+4. Close with a warm, encouraging paragraph about next steps.
+5. If anything is urgent, say so clearly but calmly — no scary medical language.
 
-Keep language simple and patient-friendly.
-Do not use complex medical jargon.
-Always include explanation even if all values are normal.
+Style rules:
+- Write like you're talking to a friend, not filling out a form.
+- No bullet-point lists — write in flowing, natural paragraphs.
+- Avoid all medical abbreviations unless you immediately explain them.
+- Use phrases like "the good news is...", "something worth keeping an eye on...", "nothing to panic about, but..."
+- Maximum 400 words. Be warm, not wordy.
 """
 
 
@@ -828,22 +856,23 @@ def answer_report_question(question, extracted_data, ai_explanation):
     # ── Gemini AI (primary path) ──────────────────────────────────────────────
     context = json.dumps(extracted_data, indent=2)
     prompt = (
-        "You are an experienced medical doctor explaining lab results to a patient in simple language.\n\n"
-        f"The patient's lab report data:\n{context}\n\n"
-        f"The patient asks: \"{question}\"\n\n"
-        "Instructions:\n"
-        "- Answer ONLY the patient's specific question — do not give a generic overview.\n"
-        "- Use the actual values from the report (reference specific numbers).\n"
-        "- Explain what normal/high/low means for THEIR body in plain language.\n"
-        "- If abnormal, explain likely causes and what they should do.\n"
-        "- Include 2–3 specific actionable lifestyle suggestions relevant to the question.\n"
-        "- Tell them clearly whether they need to see a doctor urgently or not.\n"
-        "- Do NOT use medical jargon. Write like a caring family doctor.\n"
-        "- Keep response to 2–3 focused paragraphs."
+        "You are a warm, empathetic family doctor chatting with your patient about their lab results.\n"
+        "Your tone is caring, clear, and human — like a trusted friend who happens to be a doctor.\n\n"
+        f"Patient's lab report:\n{context}\n\n"
+        f"Patient's question: \"{question}\"\n\n"
+        "How to respond:\n"
+        "- Answer their SPECIFIC question directly — don't give a generic overview.\n"
+        "- Mention their actual numbers naturally (e.g. 'your hemoglobin came in at 11.2, which is a little low').\n"
+        "- Explain what it means for their day-to-day life in plain English.\n"
+        "- If something is off, reassure them first, then explain the likely everyday reason.\n"
+        "- Give 2–3 practical, specific things they can do (food, lifestyle, when to see a doctor).\n"
+        "- Be clear about urgency — don't alarm them unnecessarily, but don't downplay serious issues.\n"
+        "- Sound like a person, not a medical report. Use 'you', 'your', 'I'd suggest'.\n"
+        "- No bullet lists — write in natural, flowing sentences. 2–3 paragraphs max."
     )
-    gemini_answer = _call_gemini(prompt, temperature=0.4)
+    gemini_answer = _call_gemini(prompt, temperature=0.5)
     if gemini_answer:
-        return gemini_answer.strip() + "\n\n⚠️ *AI-generated educational information only. Always consult your doctor for medical advice.*"
+        return gemini_answer.strip() + "\n\n⚠️ *Always consult your doctor for personalised medical advice.*"
 
     # ── Smart rule-based fallback (question-type specific) ────────────────────
 
@@ -851,88 +880,92 @@ def answer_report_question(question, extracted_data, ai_explanation):
     if any(w in question_lower for w in ['risk', 'danger', 'critical', 'serious', 'urgent', 'severe']):
         if not abnormal and not borderline:
             return (
-                "Your overall risk level is LOW. All detected parameters are within healthy ranges. "
-                "This means there are no immediate health concerns based on your current lab values. "
-                "Continue maintaining your healthy habits — balanced nutrition, regular exercise, and proper sleep.\n\n"
-                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+                "Great news — based on what I can see in your report, your risk level looks LOW. "
+                "All the values we picked up are sitting comfortably within the healthy range, which means "
+                "there's nothing here that needs urgent attention right now.\n\n"
+                "That said, it's always a good idea to check in with your doctor once a year just to stay on top of things. "
+                "Keep doing what you're doing — eat well, stay active, drink plenty of water, and get enough sleep.\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
             )
         else:
-            issues = ', '.join(f"{p['name']} is {p['status'].lower()} ({p['value']} {p['unit']})" for p in abnormal[:3])
-            border_issues = ', '.join(f"{p['name']} is borderline" for p in borderline[:2])
-            detail = issues + (f"; {border_issues}" if border_issues and abnormal else border_issues)
+            issues = ', '.join(f"{p['name']} ({p['value']} {p['unit']}, which is {p['status'].lower()})" for p in abnormal[:3])
+            border_issues = ', '.join(f"{p['name']} is sitting just on the borderline" for p in borderline[:2])
+            detail = issues + (f", and {border_issues}" if border_issues and abnormal else border_issues)
+            level = 'HIGH' if len(abnormal) >= 2 else 'MEDIUM'
             return (
-                f"Based on your results, your risk level is {'HIGH' if len(abnormal) >= 2 else 'MEDIUM'} because: {detail}. "
-                f"You have {len(abnormal)} value(s) outside the healthy range that need attention. "
-                "I recommend consulting your doctor soon — especially for the abnormal values mentioned above. "
-                "Early intervention can prevent these from becoming more serious health issues.\n\n"
-                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+                f"Looking at your results honestly, I'd put your risk level at {level} right now. "
+                f"The main reason is that {detail}. "
+                f"That's {len(abnormal)} reading{'s' if len(abnormal) > 1 else ''} outside the healthy range, which is worth taking seriously.\n\n"
+                "I wouldn't panic — many of these things are very treatable, especially when caught early. "
+                "But I would strongly encourage you to book an appointment with your doctor soon and bring this report along. "
+                "The sooner you get a proper check-up, the better your options.\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
             )
 
     # 2. 'Is my report normal?' / 'Am I okay?'
     if any(w in question_lower for w in ['normal', 'fine', 'okay', 'ok ', ' ok', 'good', 'healthy', 'alright', 'all right']):
         if not abnormal and not borderline:
-            param_list = ', '.join(f"{p['name']} ({p['value']} {p['unit']})" for p in normal[:4])
             return (
-                f"Great news! Your report looks completely normal. All {len(normal)} detected parameters are within healthy ranges.\n\n"
-                f"Specifically: {param_list}{'...' if len(normal) > 4 else ''}.\n\n"
-                "Keep up your healthy lifestyle — eat well, exercise regularly, stay hydrated, and get enough sleep. "
-                "Schedule a routine check-up every 6–12 months.\n\n"
-                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+                f"I have good news for you — your report looks really healthy! All {len(normal)} values we found are sitting nicely within their normal ranges.\n\n"
+                "That means your blood cells, organ function, and metabolic markers are all doing their job well. "
+                "Whatever you're doing in terms of diet and lifestyle, keep it up — it's clearly working.\n\n"
+                "It's still worth having a yearly check-up with your doctor just to track things over time, but based on this report, you're in good shape.\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
             )
         else:
             normal_list = ', '.join(p['name'] for p in normal[:3])
-            abnormal_list = ', '.join(f"{p['name']} ({p['status']}, {p['value']} {p['unit']})" for p in abnormal)
+            abnormal_list = ', '.join(f"{p['name']} (which came in {p['status'].lower()} at {p['value']} {p['unit']})" for p in abnormal)
             return (
-                f"Your report shows a mixed picture. The good news: {normal_list} are all normal.\n\n"
-                f"However, {len(abnormal)} parameter(s) need attention: {abnormal_list}. "
-                "These values are outside the healthy range and should be discussed with your doctor. "
-                "Don't ignore these — early treatment makes a big difference.\n\n"
-                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+                f"Your report is a bit of a mixed bag, honestly. There's plenty of good news — {normal_list or 'several of your values'} all look perfectly fine.\n\n"
+                f"But there {'are' if len(abnormal) > 1 else 'is'} {len(abnormal)} thing{'s' if len(abnormal) > 1 else ''} worth paying attention to: {abnormal_list}. "
+                "These are outside the healthy range, and it's important not to ignore them. The good news is that catching these things early gives you the best chance to fix them.\n\n"
+                "I'd recommend booking an appointment with your doctor to go over these specific values together.\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
             )
 
-    # 3. Worry / concern questions — fixed: 'worried' contains 'worried', use word stems
+    # 3. Worry / concern questions
     if any(w in question_lower for w in ['worried', 'worry', 'concern', 'bad result', 'scared', 'afraid', 'anxious']):
         if not abnormal:
             return (
-                "There's nothing to worry about based on your current lab results. "
-                "All detected values are within their healthy reference ranges. "
-                "No abnormal findings were identified that would require immediate concern.\n\n"
-                "Continue your healthy habits and go for routine check-ups annually. "
-                "If you feel unwell despite normal results, always discuss it with your doctor.\n\n"
-                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+                "Honestly? Based on this report, there's nothing that should be keeping you up at night. "
+                "Every value we picked up is sitting comfortably within the normal range — that's genuinely good news.\n\n"
+                "If you're feeling unwell despite this, always trust your body and talk to your doctor. "
+                "But from what the numbers are telling us, you're in a good place right now.\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
             )
         else:
             param_details = '\n'.join(
-                f"• {p['name']}: {p['value']} {p['unit']} (should be {p.get('normal_range','normal')}) — {p['status']}"
+                f"• {p['name']}: {p['value']} {p['unit']} (healthy range: {p.get('normal_range','—')}) — currently {p['status'].lower()}"
                 for p in abnormal
             )
             return (
-                f"Here's what needs your attention:\n\n{param_details}\n\n"
-                "These values are outside the healthy range. While this can sound alarming, many abnormal readings "
-                "are manageable with lifestyle changes or simple treatment. "
-                "The most important step is to share these results with your doctor as soon as possible.\n\n"
-                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+                f"I want to be honest with you without causing unnecessary alarm. There are a few values here that do need your attention:\n\n{param_details}\n\n"
+                "Now, before you worry too much — the fact that you've caught these through a lab test is actually a really positive thing. "
+                "Most of these kinds of readings are very manageable, whether through diet, lifestyle changes, or a short course of treatment. "
+                "What matters most right now is booking an appointment with your doctor and showing them this report. Don't leave it too long.\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
             )
 
     # 4. Diet / food / nutrition questions
     if any(w in question_lower for w in ['diet', 'food', 'eat', 'nutrition', 'meal', 'drink', 'avoid', 'consume']):
         plan = _generate_wellness_plan(extracted_data, 'Medium')
+        diet_text = '\n'.join('\u2022 ' + item for item in plan['diet'].split(' • '))
         return (
-            f"Based on your specific lab results, here are your personalised dietary recommendations:\n\n"
-            + '\n'.join('• ' + item for item in plan['diet'].split(' • ')) +
-            f"\n\nHydration: {plan['hydration']}\n\n"
-            "These suggestions are tailored to your current values. Discuss with a dietitian or your doctor for a personalised meal plan.\n\n"
-            "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+            f"Great question — what you eat can make a real difference to your results. Based on your specific values, here's what I'd suggest:\n\n{diet_text}\n\n"
+            f"On hydration: {plan['hydration']}\n\n"
+            "These aren't generic tips — they're matched to your actual readings. For a more detailed plan tailored to you, a registered dietitian can be really helpful.\n\n"
+            "⚠️ *Always consult your doctor for personalised medical advice.*"
         )
 
     # 5. Exercise / lifestyle questions
     if any(w in question_lower for w in ['exercise', 'workout', 'gym', 'sport', 'physical', 'walk', 'run', 'activity', 'fitness']):
         plan = _generate_wellness_plan(extracted_data, 'Medium')
+        ex_text = '\n'.join('\u2022 ' + item for item in plan['exercise'].split(' • '))
         return (
-            f"Based on your lab results, here are your recommended physical activity guidelines:\n\n"
-            + '\n'.join('• ' + item for item in plan['exercise'].split(' • ')) +
-            f"\n\nSleep: {plan['sleep']}\nStress: {plan['stress']}\n\n"
-            "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+            f"Movement is one of the best medicines, and your results give us a good idea of where to start. Here's what I'd suggest for you:\n\n{ex_text}\n\n"
+            f"On sleep: {plan['sleep']}\nOn stress: {plan['stress']}\n\n"
+            "Start small and build gradually — even a 20-minute walk daily can shift your numbers meaningfully over time.\n\n"
+            "⚠️ *Always consult your doctor for personalised medical advice.*"
         )
 
     # 6. Specific parameter keyword matching (order: longer phrases first)
@@ -977,57 +1010,50 @@ def answer_report_question(question, extracted_data, ai_explanation):
     if matched_param:
         return (
             _build_parameter_explanation(matched_param) +
-            "\n\n⚠️ *AI-generated educational information only. Please consult your doctor for personalised medical advice.*"
+            "\n\n⚠️ *Always consult your doctor for personalised medical advice.*"
         )
 
     # 7. 'What should I do?' / 'Next steps?'
     if any(w in question_lower for w in ['do next', 'what should', 'next step', 'what to do', 'action', 'recommend', 'suggest']):
         if not abnormal:
             return (
-                "Since all your parameters are normal, your next steps are simple:\n\n"
-                "• Continue eating a balanced diet rich in fruits, vegetables, and whole grains\n"
-                "• Exercise for at least 30 minutes, 5 days a week\n"
-                "• Drink 8–10 glasses of water daily\n"
-                "• Get 7–9 hours of sleep each night\n"
-                "• Schedule a routine check-up every 6–12 months\n\n"
-                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+                "Since everything looks good in your report, your next steps are actually pretty simple — just keep doing what you're doing:\n\n"
+                "• Keep eating a balanced diet with plenty of fruits, vegetables, and whole grains\n"
+                "• Exercise for at least 30 minutes, 5 days a week — even brisk walking counts\n"
+                "• Drink 8–10 glasses of water daily — your kidneys and heart will thank you\n"
+                "• Aim for a yearly check-up with your doctor to keep track of things over time\n"
+                "• If you notice any new symptoms or just don't feel right, don't hesitate to get checked out\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
             )
         else:
+            specific = '\n'.join(f"• Ask your doctor specifically about your {p['name']} — it came in {p['status'].lower()} at {p['value']} {p['unit']}" for p in abnormal[:3])
             return (
-                f"Based on your {len(abnormal)} abnormal value(s), here are your recommended next steps:\n\n"
-                "• Book an appointment with your doctor and bring this report\n"
-                + ''.join(f"• Ask your doctor specifically about your {p['name']} ({p['status']}: {p['value']} {p['unit']})\n" for p in abnormal[:3]) +
-                "• Do not self-medicate based on this report alone\n"
-                "• Follow the lifestyle plan in the Wellness tab above\n"
-                "• Retest in 4–6 weeks after any treatment or lifestyle changes\n\n"
-                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+                f"Given that you have {len(abnormal)} value{'s' if len(abnormal) > 1 else ''} outside the healthy range, here's what I'd suggest doing:\n\n"
+                f"• Book an appointment with your doctor as soon as you can — ideally within the next 1–2 weeks\n"
+                f"{specific}\n"
+                "• Bring this report with you — your doctor needs to see the actual numbers\n"
+                "• Don't try to treat this yourself based on what you read online\n"
+                "• After any treatment or lifestyle changes, retest in 4–6 weeks to see if things are improving\n\n"
+                "⚠️ *Always consult your doctor for personalised medical advice.*"
             )
 
     # 8. Final catch-all — give a useful specific summary
-    summary_parts = []
-    if abnormal:
-        summary_parts.append(
-            f"{len(abnormal)} value(s) need attention: " +
-            ', '.join(f"{p['name']} ({p['status']}, {p['value']} {p['unit']})" for p in abnormal)
-        )
-    if borderline:
-        summary_parts.append(
-            f"{len(borderline)} borderline value(s): " +
-            ', '.join(f"{p['name']} ({p['value']} {p['unit']})" for p in borderline)
-        )
-    if normal:
-        summary_parts.append(f"{len(normal)} value(s) are healthy and normal")
-
-    summary = '. '.join(summary_parts) + '.' if summary_parts else 'No parameters detected.'
-    return (
-        f"Here's a quick summary of your report: {summary}\n\n"
-        "Try asking me something more specific like:\n"
-        "• 'Is my hemoglobin normal?'\n"
-        "• 'What does my high glucose mean?'\n"
-        "• 'What diet should I follow?'\n"
-        "• 'Should I see a doctor urgently?'\n\n"
-        "⚠️ *AI-generated educational information only. Please consult your doctor.*"
+    total = len(extracted_data)
+    abn_count = len(abnormal)
+    bord_count = len(borderline)
+    norm_count = len(normal)
+    summary = f"I've gone through your report and found {total} value{'s' if total != 1 else ''}. "
+    if abn_count:
+        summary += f"{abn_count} of {'them are' if abn_count > 1 else 'them is'} outside the healthy range — specifically {', '.join(p['name'] for p in abnormal)}. "
+    if bord_count:
+        summary += f"{bord_count} {'are' if bord_count > 1 else 'is'} sitting on the borderline and worth watching. "
+    if norm_count:
+        summary += f"The good news is {norm_count} {'are' if norm_count > 1 else 'is'} completely normal. "
+    summary += (
+        "\n\nFeel free to ask me anything — try something like 'What should I be worried about?', "
+        "'What should I eat?', 'Explain my risk level', or ask about a specific test like 'Tell me about my glucose'."
     )
+    return summary + "\n\n⚠️ *Always consult your doctor for personalised medical advice.*"
 
 
 def analyze_medical_report(file_path):
