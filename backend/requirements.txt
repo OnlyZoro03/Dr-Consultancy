@@ -10,4 +10,4 @@ pdfminer.six
 pytesseract
 Pillow
 firebase-admin
-google-generativeai
+google-genai

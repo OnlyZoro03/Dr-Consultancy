@@ -317,8 +317,20 @@ const ReportAnalysis = () => {
         try {
             const res = await api.post('/report-chat', { question, report_id: selectedReport.id });
             setChatMessages(prev => [...prev, { role: 'assistant', text: res.data.answer }]);
-        } catch {
-            setChatMessages(prev => [...prev, { role: 'assistant', text: 'Sorry, I could not process that question. Please try again.' }]);
+        } catch (err) {
+            const status = err?.response?.status;
+            const msg = err?.response?.data?.message;
+            let errorText = 'Something went wrong. Please try again in a moment.';
+            if (status === 401 || status === 403) {
+                errorText = 'Session expired. Please refresh the page and log in again.';
+            } else if (status === 404) {
+                errorText = 'Report not found. Please re-select your report and try again.';
+            } else if (status === 500) {
+                errorText = `Server error: ${msg || 'Unknown error'}. Please try again.`;
+            } else if (!err?.response) {
+                errorText = 'Cannot reach the server. Please make sure the backend is running on port 5000.';
+            }
+            setChatMessages(prev => [...prev, { role: 'assistant', text: errorText }]);
         } finally { setChatLoading(false); }
     };
 

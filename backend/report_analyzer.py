@@ -4,7 +4,6 @@ import pytesseract
 from PIL import Image
 import os
 import json
-import warnings
 
 # Load .env FIRST so GEMINI_API_KEY is always available
 try:
@@ -14,17 +13,13 @@ try:
 except ImportError:
     pass
 
-# Google Generative AI SDK for Gemini LLM-powered explanations
+# New google.genai SDK (replaces deprecated google.generativeai)
 try:
-    warnings.filterwarnings('ignore', category=FutureWarning, module='google')
-    import google.generativeai as genai_sdk
+    from google import genai as _genai_client_lib
+    from google.genai import types as _genai_types
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
-
-# Hard-coded fallback removed — key was flagged as leaked after GitHub push.
-# Set GEMINI_API_KEY in backend/.env and NEVER commit that file.
-_HARDCODED_KEY = ''
 
 def _get_gemini_key():
     """Read API key from environment only (never from hardcoded string)."""
@@ -32,45 +27,51 @@ def _get_gemini_key():
 
 
 def _call_gemini(prompt, temperature=0.4):
-    """Call Gemini with multi-model fallback. Each model has a separate free-tier quota."""
+    """Call Gemini with multi-model fallback using the new google.genai SDK."""
     if not GEMINI_AVAILABLE:
         return None
 
-    # Try models in order — if one hits quota, the next one is attempted
+    # Try models in order — separate free-tier quotas per model
     _MODELS = [
-        'gemini-2.5-flash-lite',   # lightest, fastest, separate free-tier quota
-        'gemini-2.5-flash',        # more capable, still free-tier
-        'gemini-2.0-flash-lite',   # fallback — may hit daily limit
-        'gemini-2.0-flash',        # last resort
+        'gemini-2.5-flash-lite',
+        'gemini-2.5-flash',
+        'gemini-2.0-flash-lite',
+        'gemini-2.0-flash',
     ]
 
     key = _get_gemini_key()
     if not key:
         print('[Gemini] No API key found. Set GEMINI_API_KEY in backend/.env')
         return None
-    genai_sdk.configure(api_key=key)
-    gen_cfg = {'temperature': temperature, 'max_output_tokens': 1024}
+
+    client = _genai_client_lib.Client(api_key=key)
+    config = _genai_types.GenerateContentConfig(
+        temperature=temperature,
+        max_output_tokens=1024,
+    )
 
     for model_name in _MODELS:
         try:
-            model = genai_sdk.GenerativeModel(model_name, generation_config=gen_cfg)
-            response = model.generate_content(prompt)
-            if response and response.text:
-                return response.text
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=config,
+            )
+            text = response.text if response and response.text else None
+            if text:
+                return text
         except Exception as e:
             err = str(e)
-            # 403 means key is blocked/leaked — no point trying other models
             if '403' in err or 'leaked' in err.lower():
-                print(f'[Gemini] API key is blocked or reported as leaked. Generate a new key at https://aistudio.google.com/')
+                print('[Gemini] API key is blocked or leaked. Generate a new key at https://aistudio.google.com/')
                 return None
-            # 404 means model is deprecated/removed — try next model
             if '404' in err or 'not found' in err.lower():
-                print(f'[Gemini] {model_name} is deprecated, trying next model...')
+                print(f'[Gemini] {model_name} not available, trying next...')
                 continue
-            if '429' in err or 'quota' in err.lower() or 'rate' in err.lower():
-                print(f'[Gemini] {model_name} quota exceeded, trying next model...')
+            if '429' in err or 'quota' in err.lower() or 'exhausted' in err.lower():
+                print(f'[Gemini] {model_name} quota exceeded, trying next...')
                 continue
-            print(f'[Gemini] {model_name} failed: {e}')
+            print(f'[Gemini] {model_name} error: {e}')
             continue
 
     print('[Gemini] All models exhausted — using rule-based fallback.')
