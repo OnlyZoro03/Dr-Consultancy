@@ -7,8 +7,8 @@ const firebaseConfig = {
     projectId: "drconsultancy-472cb",
     storageBucket: "drconsultancy-472cb.firebasestorage.app",
     messagingSenderId: "504163694907",
-    appId: "1:504163694907:web:a7964a12aa347dbb5e9f1e",
-    measurementId: "G-KDPY1LP1YV"
+    appId: "1:504163694907:web:978ce95e19a026585e9f1e",
+    measurementId: "G-N535Y2N3C0"
 };
 
 const app = initializeApp(firebaseConfig);
