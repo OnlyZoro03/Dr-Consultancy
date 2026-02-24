@@ -38,10 +38,10 @@ def _call_gemini(prompt, temperature=0.4):
 
     # Try models in order — if one hits quota, the next one is attempted
     _MODELS = [
-        'gemini-2.0-flash-lite',   # lightest, highest free-tier RPM
-        'gemini-1.5-flash-8b',     # fast small model, separate quota
-        'gemini-1.5-flash',        # reliable fallback
-        'gemini-2.0-flash',        # original — may hit daily limit
+        'gemini-2.5-flash-lite',   # lightest, fastest, separate free-tier quota
+        'gemini-2.5-flash',        # more capable, still free-tier
+        'gemini-2.0-flash-lite',   # fallback — may hit daily limit
+        'gemini-2.0-flash',        # last resort
     ]
 
     key = _get_gemini_key()
@@ -59,9 +59,14 @@ def _call_gemini(prompt, temperature=0.4):
                 return response.text
         except Exception as e:
             err = str(e)
-            if '403' in err or 'leaked' in err.lower() or 'invalid' in err.lower():
-                print(f'[Gemini] API key is invalid or leaked. Please generate a new key at https://aistudio.google.com/')
-                return None  # No point trying other models with a bad key
+            # 403 means key is blocked/leaked — no point trying other models
+            if '403' in err or 'leaked' in err.lower():
+                print(f'[Gemini] API key is blocked or reported as leaked. Generate a new key at https://aistudio.google.com/')
+                return None
+            # 404 means model is deprecated/removed — try next model
+            if '404' in err or 'not found' in err.lower():
+                print(f'[Gemini] {model_name} is deprecated, trying next model...')
+                continue
             if '429' in err or 'quota' in err.lower() or 'rate' in err.lower():
                 print(f'[Gemini] {model_name} quota exceeded, trying next model...')
                 continue
