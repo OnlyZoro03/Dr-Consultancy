@@ -4,17 +4,48 @@ import pytesseract
 from PIL import Image
 import os
 import json
+import warnings
+
+# Load .env FIRST so GEMINI_API_KEY is always available
+try:
+    from dotenv import load_dotenv
+    _env_path = os.path.join(os.path.dirname(__file__), '.env')
+    load_dotenv(_env_path)
+except ImportError:
+    pass
 
 # Google Generative AI SDK for Gemini LLM-powered explanations
 try:
-    import google.generativeai as genai_sdk
-    import warnings
     warnings.filterwarnings('ignore', category=FutureWarning, module='google')
+    import google.generativeai as genai_sdk
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
 
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+# Hard-coded fallback so key is ALWAYS available even if .env is missing
+_HARDCODED_KEY = 'AIzaSyAapD-tQ9hJZKg1WNUAKpYHq9-XnESyyf0'
+
+def _get_gemini_key():
+    """Always returns the freshest key — env var takes priority over hard-coded."""
+    return os.environ.get('GEMINI_API_KEY', '') or _HARDCODED_KEY
+
+
+def _call_gemini(prompt, temperature=0.4):
+    """Call Gemini and return text, or None on failure."""
+    if not GEMINI_AVAILABLE:
+        return None
+    try:
+        key = _get_gemini_key()
+        genai_sdk.configure(api_key=key)
+        model = genai_sdk.GenerativeModel(
+            'gemini-2.0-flash',
+            generation_config={'temperature': temperature, 'max_output_tokens': 1024}
+        )
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        print(f'[Gemini] API call failed: {e}')
+        return None
 
 # ─── Comprehensive Medical Reference Ranges ───────────────────────────────────
 NORMAL_RANGES = {
@@ -687,128 +718,235 @@ Always include explanation even if all values are normal.
 
 def _try_gemini_enhance(processed_params, risk_level, risk_reasoning):
     """Enhance doctor's explanation using Gemini AI with the patient-friendly prompt."""
-    if not (GEMINI_AVAILABLE and GEMINI_API_KEY):
-        return None
-    try:
-        genai_sdk.configure(api_key=GEMINI_API_KEY)
-        model = genai_sdk.GenerativeModel('gemini-2.0-flash')
-        # Build enriched JSON with all available metadata
-        json_data = json.dumps({
-            "risk_level": risk_level,
-            "risk_reasoning": risk_reasoning,
-            "parameters": [
-                {
-                    "name": p["name"],
-                    "value": p["value"],
-                    "unit": p["unit"],
-                    "status": p["status"],
-                    "normal_range": p.get("normal_range", ""),
-                    "category": p.get("category", ""),
-                    "interpretation": p.get("interpretation", ""),
-                }
-                for p in processed_params
-            ]
-        }, indent=2)
-        prompt = DOCTOR_EXPLANATION_PROMPT.replace("{JSON_DATA}", json_data)
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception:
-        return None
+    json_data = json.dumps({
+        "risk_level": risk_level,
+        "risk_reasoning": risk_reasoning,
+        "parameters": [
+            {
+                "name": p["name"],
+                "value": p["value"],
+                "unit": p["unit"],
+                "status": p["status"],
+                "normal_range": p.get("normal_range", ""),
+                "category": p.get("category", ""),
+                "interpretation": p.get("interpretation", ""),
+            }
+            for p in processed_params
+        ]
+    }, indent=2)
+    prompt = DOCTOR_EXPLANATION_PROMPT.replace("{JSON_DATA}", json_data)
+    return _call_gemini(prompt, temperature=0.3)
 
 
 def answer_report_question(question, extracted_data, ai_explanation):
-    """Answer a patient's question about their report contextually."""
+    """Answer a patient's question about their report using Gemini AI with smart fallback."""
     if not extracted_data:
         return (
-            "I don't have sufficient data from your report to answer that specifically. "
-            "Please ensure your report was processed successfully, then try again."
+            "I don't have enough data from your report yet. "
+            "Please make sure your report was uploaded and analyzed successfully, then try again."
         )
 
-    question_lower = question.lower()
+    question_lower = question.lower().strip()
+    abnormal   = [p for p in extracted_data if p["status"] in ("High", "Low")]
+    borderline = [p for p in extracted_data if p["status"] == "Borderline"]
+    normal     = [p for p in extracted_data if p["status"] == "Normal"]
 
-    # Try Gemini if available
-    if GEMINI_AVAILABLE and GEMINI_API_KEY:
-        try:
-            genai_sdk.configure(api_key=GEMINI_API_KEY)
-            model = genai_sdk.GenerativeModel('gemini-2.0-flash')
-            context = json.dumps(extracted_data, indent=2)
-            prompt = (
-                "You are an experienced medical doctor explaining lab results to a patient in simple language.\n\n"
-                f"Given this extracted report data:\n\n{context}\n\n"
-                f"The patient is asking: \"{question}\"\n\n"
-                "Answer their specific question clearly and in simple, patient-friendly language.\n"
-                "- Do not use complex medical jargon.\n"
-                "- Reference their actual values where relevant (normal/high/low).\n"
-                "- Explain what it means for their body.\n"
-                "- Give practical lifestyle suggestions if applicable.\n"
-                "- State clearly if they should urgently see a doctor.\n"
-                "- Always include an explanation even if all values are normal.\n"
-                "Keep the answer concise (2–3 paragraphs)."
+    # ── Gemini AI (primary path) ──────────────────────────────────────────────
+    context = json.dumps(extracted_data, indent=2)
+    prompt = (
+        "You are an experienced medical doctor explaining lab results to a patient in simple language.\n\n"
+        f"The patient's lab report data:\n{context}\n\n"
+        f"The patient asks: \"{question}\"\n\n"
+        "Instructions:\n"
+        "- Answer ONLY the patient's specific question — do not give a generic overview.\n"
+        "- Use the actual values from the report (reference specific numbers).\n"
+        "- Explain what normal/high/low means for THEIR body in plain language.\n"
+        "- If abnormal, explain likely causes and what they should do.\n"
+        "- Include 2–3 specific actionable lifestyle suggestions relevant to the question.\n"
+        "- Tell them clearly whether they need to see a doctor urgently or not.\n"
+        "- Do NOT use medical jargon. Write like a caring family doctor.\n"
+        "- Keep response to 2–3 focused paragraphs."
+    )
+    gemini_answer = _call_gemini(prompt, temperature=0.4)
+    if gemini_answer:
+        return gemini_answer.strip() + "\n\n⚠️ *AI-generated educational information only. Always consult your doctor for medical advice.*"
+
+    # ── Smart rule-based fallback (question-type specific) ────────────────────
+
+    # 1. Risk level questions
+    if any(w in question_lower for w in ['risk', 'danger', 'critical', 'serious', 'urgent', 'severe']):
+        if not abnormal and not borderline:
+            return (
+                "Your overall risk level is LOW. All detected parameters are within healthy ranges. "
+                "This means there are no immediate health concerns based on your current lab values. "
+                "Continue maintaining your healthy habits — balanced nutrition, regular exercise, and proper sleep.\n\n"
+                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
             )
-            response = model.generate_content(prompt)
-            return response.text + "\n\n*This is AI-generated educational information only. Please consult your doctor.*"
-        except Exception:
-            pass
+        else:
+            issues = ', '.join(f"{p['name']} is {p['status'].lower()} ({p['value']} {p['unit']})" for p in abnormal[:3])
+            border_issues = ', '.join(f"{p['name']} is borderline" for p in borderline[:2])
+            detail = issues + (f"; {border_issues}" if border_issues and abnormal else border_issues)
+            return (
+                f"Based on your results, your risk level is {'HIGH' if len(abnormal) >= 2 else 'MEDIUM'} because: {detail}. "
+                f"You have {len(abnormal)} value(s) outside the healthy range that need attention. "
+                "I recommend consulting your doctor soon — especially for the abnormal values mentioned above. "
+                "Early intervention can prevent these from becoming more serious health issues.\n\n"
+                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+            )
 
-    # Rule-based fallback
-    keywords_map = {
-        'sugar': 'Glucose', 'blood sugar': 'Glucose', 'diabetes': 'Glucose', 'glucose': 'Glucose',
-        'hemoglobin': 'Hemoglobin', 'hb': 'Hemoglobin', 'haemoglobin': 'Hemoglobin', 'anemia': 'Hemoglobin', 'anaemia': 'Hemoglobin',
-        'wbc': 'WBC Count', 'white blood': 'WBC Count', 'infection': 'WBC Count', 'leukocyte': 'WBC Count',
-        'rbc': 'RBC Count', 'red blood': 'RBC Count',
-        'platelet': 'Platelets', 'clot': 'Platelets', 'plt': 'Platelets',
-        'bp': 'Systolic BP', 'blood pressure': 'Systolic BP', 'hypertension': 'Systolic BP', 'systolic': 'Systolic BP',
-        'heart rate': 'Heart Rate', 'pulse': 'Heart Rate', 'bpm': 'Heart Rate',
-        'cholesterol': 'Total Cholesterol', 'ldl': 'LDL Cholesterol', 'hdl': 'HDL Cholesterol',
-        'triglyceride': 'Triglycerides', 'tg': 'Triglycerides',
-        'kidney': 'Creatinine', 'creatinine': 'Creatinine', 'renal': 'Creatinine',
-        'liver': 'ALT', 'alt': 'ALT', 'sgpt': 'ALT', 'ast': 'AST', 'sgot': 'AST',
-        'thyroid': 'TSH', 'tsh': 'TSH',
-        'hba1c': 'HbA1c', 'a1c': 'HbA1c',
-        'oxygen': 'Oxygen Saturation', 'spo2': 'Oxygen Saturation',
-        'temperature': 'Temperature', 'fever': 'Temperature',
-        'bun': 'BUN', 'urea': 'BUN', 'sodium': 'Sodium', 'potassium': 'Potassium',
-    }
+    # 2. 'Is my report normal?' / 'Am I okay?'
+    if any(w in question_lower for w in ['normal', 'fine', 'okay', 'ok ', ' ok', 'good', 'healthy', 'alright', 'all right']):
+        if not abnormal and not borderline:
+            param_list = ', '.join(f"{p['name']} ({p['value']} {p['unit']})" for p in normal[:4])
+            return (
+                f"Great news! Your report looks completely normal. All {len(normal)} detected parameters are within healthy ranges.\n\n"
+                f"Specifically: {param_list}{'...' if len(normal) > 4 else ''}.\n\n"
+                "Keep up your healthy lifestyle — eat well, exercise regularly, stay hydrated, and get enough sleep. "
+                "Schedule a routine check-up every 6–12 months.\n\n"
+                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+            )
+        else:
+            normal_list = ', '.join(p['name'] for p in normal[:3])
+            abnormal_list = ', '.join(f"{p['name']} ({p['status']}, {p['value']} {p['unit']})" for p in abnormal)
+            return (
+                f"Your report shows a mixed picture. The good news: {normal_list} are all normal.\n\n"
+                f"However, {len(abnormal)} parameter(s) need attention: {abnormal_list}. "
+                "These values are outside the healthy range and should be discussed with your doctor. "
+                "Don't ignore these — early treatment makes a big difference.\n\n"
+                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+            )
+
+    # 3. Worry / concern questions — fixed: 'worried' contains 'worried', use word stems
+    if any(w in question_lower for w in ['worried', 'worry', 'concern', 'bad result', 'scared', 'afraid', 'anxious']):
+        if not abnormal:
+            return (
+                "There's nothing to worry about based on your current lab results. "
+                "All detected values are within their healthy reference ranges. "
+                "No abnormal findings were identified that would require immediate concern.\n\n"
+                "Continue your healthy habits and go for routine check-ups annually. "
+                "If you feel unwell despite normal results, always discuss it with your doctor.\n\n"
+                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+            )
+        else:
+            param_details = '\n'.join(
+                f"• {p['name']}: {p['value']} {p['unit']} (should be {p.get('normal_range','normal')}) — {p['status']}"
+                for p in abnormal
+            )
+            return (
+                f"Here's what needs your attention:\n\n{param_details}\n\n"
+                "These values are outside the healthy range. While this can sound alarming, many abnormal readings "
+                "are manageable with lifestyle changes or simple treatment. "
+                "The most important step is to share these results with your doctor as soon as possible.\n\n"
+                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+            )
+
+    # 4. Diet / food / nutrition questions
+    if any(w in question_lower for w in ['diet', 'food', 'eat', 'nutrition', 'meal', 'drink', 'avoid', 'consume']):
+        plan = _generate_wellness_plan(extracted_data, 'Medium')
+        return (
+            f"Based on your specific lab results, here are your personalised dietary recommendations:\n\n"
+            + '\n'.join('• ' + item for item in plan['diet'].split(' • ')) +
+            f"\n\nHydration: {plan['hydration']}\n\n"
+            "These suggestions are tailored to your current values. Discuss with a dietitian or your doctor for a personalised meal plan.\n\n"
+            "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+        )
+
+    # 5. Exercise / lifestyle questions
+    if any(w in question_lower for w in ['exercise', 'workout', 'gym', 'sport', 'physical', 'walk', 'run', 'activity', 'fitness']):
+        plan = _generate_wellness_plan(extracted_data, 'Medium')
+        return (
+            f"Based on your lab results, here are your recommended physical activity guidelines:\n\n"
+            + '\n'.join('• ' + item for item in plan['exercise'].split(' • ')) +
+            f"\n\nSleep: {plan['sleep']}\nStress: {plan['stress']}\n\n"
+            "⚠️ *AI-generated educational information only. Always consult your doctor.*"
+        )
+
+    # 6. Specific parameter keyword matching (order: longer phrases first)
+    keywords_map = [
+        (['blood sugar', 'fasting sugar', 'fbs', 'rbs', 'sugar level', 'glucose', 'diabetes'], 'Glucose'),
+        (['hemoglobin', 'haemoglobin', 'hgb', 'anemia', 'anaemia', 'iron level'], 'Hemoglobin'),
+        (['white blood cell', 'white cell', 'wbc', 'leukocyte', 'tlc', 'infection count'], 'WBC Count'),
+        (['red blood cell', 'red cell', 'rbc', 'erythrocyte'], 'RBC Count'),
+        (['platelet', 'plt', 'thrombocyte', 'clotting', 'bleeding time'], 'Platelets'),
+        (['blood pressure', 'hypertension', 'systolic', 'diastolic', 'bp level'], 'Systolic BP'),
+        (['heart rate', 'pulse rate', 'bpm', 'heartbeat', 'heart beat'], 'Heart Rate'),
+        (['ldl', 'bad cholesterol', 'low density'], 'LDL Cholesterol'),
+        (['hdl', 'good cholesterol', 'high density'], 'HDL Cholesterol'),
+        (['total cholesterol', 'cholesterol level', 'cholesterol'], 'Total Cholesterol'),
+        (['triglyceride', 'tg level', 'trig'], 'Triglycerides'),
+        (['creatinine', 'kidney function', 'renal function', 'gfr'], 'Creatinine'),
+        (['blood urea', 'bun', 'urea level'], 'BUN'),
+        (['sgpt', 'alt level', 'liver enzyme', 'liver function'], 'ALT'),
+        (['sgot', 'ast level'], 'AST'),
+        (['bilirubin', 'jaundice'], 'Total Bilirubin'),
+        (['thyroid', 'tsh level', 't3 ', 't4 '], 'TSH'),
+        (['hba1c', 'a1c', 'glycated', 'long term sugar', '3 month sugar'], 'HbA1c'),
+        (['oxygen', 'spo2', 'o2 sat', 'saturation', 'breathing difficulty'], 'Oxygen Saturation'),
+        (['temperature', 'fever', 'body temp'], 'Temperature'),
+        (['sodium', 'na+', 'salt level'], 'Sodium'),
+        (['potassium', 'k+', 'electrolyte'], 'Potassium'),
+    ]
 
     matched_param = None
-    for keyword, param_name in keywords_map.items():
-        if keyword in question_lower:
+    for keywords, param_name in keywords_map:
+        if any(kw in question_lower for kw in keywords):
             matched_param = next((p for p in extracted_data if p['name'] == param_name), None)
             if matched_param:
                 break
 
     if matched_param:
-        explanation = _build_parameter_explanation(matched_param)
-        answer = explanation
-        answer += "\n\n*This is AI-generated educational information only. Please consult your doctor for personalised medical advice.*"
-        return answer
+        return (
+            _build_parameter_explanation(matched_param) +
+            "\n\n⚠️ *AI-generated educational information only. Please consult your doctor for personalised medical advice.*"
+        )
 
-    # Generic fallback
-    abnormal = [p for p in extracted_data if p["status"] in ("High", "Low")]
-    if any(w in question_lower for w in ["worry", "serious", "concern", "dangerous", "bad", "okay", "good"]):
+    # 7. 'What should I do?' / 'Next steps?'
+    if any(w in question_lower for w in ['do next', 'what should', 'next step', 'what to do', 'action', 'recommend', 'suggest']):
         if not abnormal:
             return (
-                "Based on your report analysis, all detected parameters are within their healthy reference ranges. "
-                "This is a very encouraging result and suggests your current health indicators are good. "
-                "Routine healthy habits — balanced diet, regular exercise, adequate sleep, and hydration — "
-                "are all that's needed to maintain these excellent levels.\n\n"
-                "*This is AI-generated educational information only. Please consult your doctor for personalised medical advice.*"
+                "Since all your parameters are normal, your next steps are simple:\n\n"
+                "• Continue eating a balanced diet rich in fruits, vegetables, and whole grains\n"
+                "• Exercise for at least 30 minutes, 5 days a week\n"
+                "• Drink 8–10 glasses of water daily\n"
+                "• Get 7–9 hours of sleep each night\n"
+                "• Schedule a routine check-up every 6–12 months\n\n"
+                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
             )
         else:
-            param_list = ', '.join(f"{p['name']} ({p['status']})" for p in abnormal)
             return (
-                f"Your report shows {len(abnormal)} parameter(s) outside normal range: {param_list}. "
-                "While this warrants medical attention, isolated abnormal readings are common and often manageable. "
-                "Please share these results with your doctor for proper context and advice.\n\n"
-                "*This is AI-generated educational information only. Please consult your doctor for personalised medical advice.*"
+                f"Based on your {len(abnormal)} abnormal value(s), here are your recommended next steps:\n\n"
+                "• Book an appointment with your doctor and bring this report\n"
+                + ''.join(f"• Ask your doctor specifically about your {p['name']} ({p['status']}: {p['value']} {p['unit']})\n" for p in abnormal[:3]) +
+                "• Do not self-medicate based on this report alone\n"
+                "• Follow the lifestyle plan in the Wellness tab above\n"
+                "• Retest in 4–6 weeks after any treatment or lifestyle changes\n\n"
+                "⚠️ *AI-generated educational information only. Always consult your doctor.*"
             )
 
+    # 8. Final catch-all — give a useful specific summary
+    summary_parts = []
+    if abnormal:
+        summary_parts.append(
+            f"{len(abnormal)} value(s) need attention: " +
+            ', '.join(f"{p['name']} ({p['status']}, {p['value']} {p['unit']})" for p in abnormal)
+        )
+    if borderline:
+        summary_parts.append(
+            f"{len(borderline)} borderline value(s): " +
+            ', '.join(f"{p['name']} ({p['value']} {p['unit']})" for p in borderline)
+        )
+    if normal:
+        summary_parts.append(f"{len(normal)} value(s) are healthy and normal")
+
+    summary = '. '.join(summary_parts) + '.' if summary_parts else 'No parameters detected.'
     return (
-        f"Your report includes {len(extracted_data)} analysed parameters. "
-        f"Of these, {len([p for p in extracted_data if p['status'] == 'Normal'])} are within normal range. "
-        "You can ask me about any specific test by name — for example, 'What does my hemoglobin level mean?' "
-        "or 'Why is my WBC high?'\n\n"
-        "*This is AI-generated educational information only. Please consult your doctor for personalised medical advice.*"
+        f"Here's a quick summary of your report: {summary}\n\n"
+        "Try asking me something more specific like:\n"
+        "• 'Is my hemoglobin normal?'\n"
+        "• 'What does my high glucose mean?'\n"
+        "• 'What diet should I follow?'\n"
+        "• 'Should I see a doctor urgently?'\n\n"
+        "⚠️ *AI-generated educational information only. Please consult your doctor.*"
     )
 
 
