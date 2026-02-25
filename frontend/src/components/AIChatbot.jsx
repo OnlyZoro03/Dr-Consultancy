@@ -83,14 +83,14 @@ export default function AIChatbot() {
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
-  if (!user || ['/login', '/register'].includes(pathname)) return null;
-
   useEffect(() => { if (open) setPulse(false); }, [open]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
   useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 100); }, [open]);
   useEffect(() => {
     if (cameraOpen && cameraStream && videoRef.current) videoRef.current.srcObject = cameraStream;
   }, [cameraOpen, cameraStream]);
+
+  if (!user || ['/login', '/register'].includes(pathname)) return null;
 
   const allSharedFiles = messages
     .filter(m => m.role === 'user' && m.attachments?.length)
