@@ -82,6 +82,11 @@ export default function AIChatbot() {
   const canvasRef = useRef(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
+  const sessionIdRef = useRef(null);
+
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [sessions, setSessions] = useState([]);
+  const [currentSessionId, setCurrentSessionId] = useState(null);
 
   useEffect(() => { if (open) setPulse(false); }, [open]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
@@ -89,8 +94,17 @@ export default function AIChatbot() {
   useEffect(() => {
     if (cameraOpen && cameraStream && videoRef.current) videoRef.current.srcObject = cameraStream;
   }, [cameraOpen, cameraStream]);
+  useEffect(() => {
+    if (!user) return;
+    try {
+      const stored = JSON.parse(localStorage.getItem(`dr_ai_history_${user.uid}`) || '[]');
+      setSessions(stored);
+    } catch { setSessions([]); }
+  }, [user]);
 
   if (!user || ['/login', '/register'].includes(pathname)) return null;
+
+  const historyKey = `dr_ai_history_${user.uid}`;
 
   const allSharedFiles = messages
     .filter(m => m.role === 'user' && m.attachments?.length)
@@ -129,6 +143,32 @@ export default function AIChatbot() {
   });
   const clearPending = () => { pendingFiles.forEach(f => { if (f.url?.startsWith('blob:')) URL.revokeObjectURL(f.url); }); setPendingFiles([]); };
 
+  const startNewChat = () => {
+    sessionIdRef.current = null;
+    setCurrentSessionId(null);
+    setMessages([{ role: 'assistant', text: "Hi! I'm Dr. AI 👋 I'm here to help you understand health topics, symptoms, and medical questions. What would you like to know?" }]);
+    setHistoryOpen(false);
+    setInput('');
+    clearPending();
+  };
+
+  const loadSession = (session) => {
+    sessionIdRef.current = session.id;
+    setCurrentSessionId(session.id);
+    setMessages(session.messages);
+    setHistoryOpen(false);
+  };
+
+  const deleteSession = (id, e) => {
+    e.stopPropagation();
+    setSessions(prev => {
+      const next = prev.filter(s => s.id !== id);
+      localStorage.setItem(historyKey, JSON.stringify(next));
+      return next;
+    });
+    if (currentSessionId === id) startNewChat();
+  };
+
   const send = async (text) => {
     const q = (text || input).trim();
     if ((!q && !pendingFiles.length) || loading) return;
@@ -145,7 +185,25 @@ export default function AIChatbot() {
     try {
       const history = [...messages, userMsg].slice(-10).map(m => ({ role: m.role, text: m.text }));
       const res = await api.post('/ai-chat', { message: q || `I shared ${snapped.length} file(s).`, history });
-      setMessages(prev => [...prev, { role: 'assistant', text: res.data.answer }]);
+      const aiMsg = { role: 'assistant', text: res.data.answer };
+      setMessages(prev => {
+        const updated = [...prev, aiMsg];
+        if (!sessionIdRef.current) sessionIdRef.current = Date.now().toString();
+        const id = sessionIdRef.current;
+        setCurrentSessionId(id);
+        const firstUser = updated.find(m => m.role === 'user');
+        const title = (firstUser?.text || 'New conversation').slice(0, 60);
+        const saveable = {
+          id, title, timestamp: Date.now(),
+          messages: updated.map(m => ({ ...m, attachments: m.attachments?.filter(a => !a.url?.startsWith('blob:')) ?? null })),
+        };
+        setSessions(sp => {
+          const next = [saveable, ...sp.filter(s => s.id !== id)].slice(0, 50);
+          localStorage.setItem(historyKey, JSON.stringify(next));
+          return next;
+        });
+        return updated;
+      });
     } catch (err) {
       const s = err?.response?.status;
       setMessages(prev => [...prev, { role: 'assistant', text: s === 401 || s === 403 ? 'Session expired. Please refresh.' : "Sorry, couldn’t connect. Try again." }]);
@@ -286,15 +344,60 @@ export default function AIChatbot() {
               </div>
             </div>
             <div style={{marginLeft:'auto',display:'flex',gap:6,alignItems:'center'}}>
+              <button onClick={startNewChat} title="New chat" style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',borderRadius:8,padding:'5px 10px',cursor:'pointer',fontSize:13,display:'flex',alignItems:'center',fontWeight:600}}>✏️</button>
+              <button onClick={()=>setHistoryOpen(h=>!h)} title="Chat history" style={{background:historyOpen?'rgba(255,255,255,0.35)':'rgba(255,255,255,0.15)',border:'none',color:'#fff',borderRadius:8,padding:'5px 10px',cursor:'pointer',fontSize:12,display:'flex',alignItems:'center',gap:4,fontWeight:600}}>
+                🕐{sessions.length>0&&<span style={{background:'#fbbf24',color:'#1e293b',borderRadius:20,fontSize:10,fontWeight:800,padding:'1px 5px',marginLeft:3}}>{sessions.length}</span>}
+              </button>
               <button onClick={()=>setViewerOpen(true)} title="View shared files" style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',borderRadius:8,padding:'5px 10px',cursor:'pointer',fontSize:12,display:'flex',alignItems:'center',gap:4,fontWeight:600}}>
-                📁 {allSharedFiles.length>0&&<span style={{background:'#fbbf24',color:'#1e293b',borderRadius:20,fontSize:10,fontWeight:800,padding:'1px 5px'}}>{allSharedFiles.length}</span>}
+                📁{allSharedFiles.length>0&&<span style={{background:'#fbbf24',color:'#1e293b',borderRadius:20,fontSize:10,fontWeight:800,padding:'1px 5px',marginLeft:3}}>{allSharedFiles.length}</span>}
               </button>
               <button onClick={()=>setOpen(false)} style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',borderRadius:8,width:30,height:30,cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
             </div>
           </div>
 
+          {/* History Panel */}
+          {historyOpen&&(
+            <div style={{flex:1,display:'flex',flexDirection:'column',background:'#fafbff',overflow:'hidden'}}>
+              <div style={{padding:'12px 14px',borderBottom:'1px solid #e2e8f0',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0,background:'#fff'}}>
+                <span style={{fontWeight:700,fontSize:13,color:'#1e293b'}}>🕐 Chat History</span>
+                <button onClick={startNewChat} style={{background:'linear-gradient(135deg,#4f46e5,#7c3aed)',border:'none',color:'#fff',borderRadius:8,padding:'5px 14px',cursor:'pointer',fontSize:12,fontWeight:600}}>✏️ New Chat</button>
+              </div>
+              {sessions.length===0?(
+                <div style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:'#94a3b8',padding:'2rem',textAlign:'center'}}>
+                  <div style={{fontSize:48,marginBottom:12}}>💬</div>
+                  <div style={{fontWeight:600,marginBottom:4,color:'#64748b'}}>No saved chats yet</div>
+                  <div style={{fontSize:12}}>Start a conversation and it'll appear here</div>
+                </div>
+              ):(
+                <div style={{flex:1,overflowY:'auto',padding:'10px',display:'flex',flexDirection:'column',gap:6}}>
+                  {sessions.map(s=>(
+                    <div key={s.id} onClick={()=>loadSession(s)} style={{
+                      background:s.id===currentSessionId?'#ede9fe':'#fff',
+                      border:`1.5px solid ${s.id===currentSessionId?'#7c3aed':'#e2e8f0'}`,
+                      borderRadius:12,padding:'10px 12px',cursor:'pointer',
+                      display:'flex',alignItems:'center',gap:10,transition:'box-shadow 0.15s',
+                    }}
+                      onMouseEnter={e=>e.currentTarget.style.boxShadow='0 2px 12px rgba(79,70,229,0.12)'}
+                      onMouseLeave={e=>e.currentTarget.style.boxShadow='none'}
+                    >
+                      <div style={{width:32,height:32,borderRadius:8,background:'#e0e7ff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:15,flexShrink:0}}>💬</div>
+                      <div style={{flex:1,overflow:'hidden'}}>
+                        <div style={{fontSize:12.5,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.title}</div>
+                        <div style={{fontSize:11,color:'#94a3b8',marginTop:2}}>{new Date(s.timestamp).toLocaleDateString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>
+                      </div>
+                      <button onClick={e=>deleteSession(s.id,e)} title="Delete" style={{background:'none',border:'none',color:'#94a3b8',cursor:'pointer',padding:'4px 6px',borderRadius:6,fontSize:14,flexShrink:0,lineHeight:1,transition:'background 0.15s,color 0.15s'}}
+                        onMouseEnter={e=>{e.currentTarget.style.background='#fee2e2';e.currentTarget.style.color='#ef4444';}}
+                        onMouseLeave={e=>{e.currentTarget.style.background='none';e.currentTarget.style.color='#94a3b8';}}
+                      >🗑</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Messages */}
-          <div style={{flex:1,overflowY:'auto',padding:'16px 14px',display:'flex',flexDirection:'column',gap:4,background:'#fafbff'}}>
+          {!historyOpen&&<div style={{flex:1,overflowY:'auto',padding:'16px 14px',display:'flex',flexDirection:'column',gap:4,background:'#fafbff'}}>
             {messages.map((m,i)=>(
               <div key={i} style={{display:'flex',justifyContent:m.role==='user'?'flex-end':'flex-start',marginBottom:6}}>
                 {m.role==='assistant'&&<div style={{width:28,height:28,borderRadius:'50%',background:'#e0e7ff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,marginRight:8,flexShrink:0,alignSelf:'flex-end'}}>🩺</div>}
@@ -340,10 +443,10 @@ export default function AIChatbot() {
               </div>
             )}
             <div ref={bottomRef}/>
-          </div>
+          </div>}
 
           {/* Pending files bar */}
-          {pendingFiles.length>0&&(
+          {!historyOpen&&pendingFiles.length>0&&(
             <div style={{padding:'8px 12px',borderTop:'1px solid #e2e8f0',background:'#f8faff',flexShrink:0}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
                 <span style={{fontSize:11,fontWeight:700,color:'#4f46e5'}}>{pendingFiles.length} file{pendingFiles.length>1?'s':''} ready to send</span>
@@ -366,7 +469,7 @@ export default function AIChatbot() {
           )}
 
           {/* Input area */}
-          <div style={{padding:'10px 12px',borderTop:'1px solid #e2e8f0',background:'#fff',flexShrink:0}}>
+          {!historyOpen&&<div style={{padding:'10px 12px',borderTop:'1px solid #e2e8f0',background:'#fff',flexShrink:0}}>
             <div style={{display:'flex',gap:6,marginBottom:8,alignItems:'center'}}>
               <ToolBtn title="Attach multiple files / images" onClick={()=>fileInputRef.current?.click()}>📎</ToolBtn>
               <input ref={fileInputRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt" multiple style={{display:'none'}} onChange={handleFilePick}/>
@@ -389,7 +492,7 @@ export default function AIChatbot() {
                 {loading?<span style={{width:16,height:16,border:'2px solid #fff',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 0.7s linear infinite',display:'inline-block'}}/>:'➤'}
               </button>
             </div>
-          </div>
+          </div>}
         </div>
       )}
     </>
