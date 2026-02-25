@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useLocation } from 'react-router-dom';
 
 const SUGGESTIONS = [
   'What does high blood pressure mean?',
@@ -11,251 +12,383 @@ const SUGGESTIONS = [
 ];
 
 const TypingIndicator = () => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 14px',
-    background: '#f1f5f9', borderRadius: '18px 18px 18px 4px', width: 'fit-content', marginBottom: 8 }}>
+  <div style={{
+    display: 'flex', alignItems: 'center', gap: 6, padding: '10px 14px',
+    background: '#f1f5f9', borderRadius: '18px 18px 18px 4px', width: 'fit-content', marginBottom: 8,
+  }}>
     {[0, 1, 2].map(i => (
       <span key={i} style={{
         width: 8, height: 8, borderRadius: '50%', background: '#94a3b8',
-        animation: 'bounce 1.2s infinite', animationDelay: `${i * 0.2}s`, display: 'inline-block'
+        animation: 'bounce 1.2s infinite', animationDelay: `${i * 0.2}s`, display: 'inline-block',
       }} />
     ))}
-    <style>{`
-      @keyframes bounce {
-        0%, 60%, 100% { transform: translateY(0); }
-        30% { transform: translateY(-6px); }
-      }
-    `}</style>
   </div>
 );
 
+const ToolBtn = ({ title, onClick, children, disabled, badge }) => (
+  <div style={{ position: 'relative', display: 'inline-flex' }}>
+    <button title={title} onClick={onClick} disabled={disabled} style={{
+      width: 34, height: 34, borderRadius: 10, border: '1.5px solid #e2e8f0',
+      background: '#f8fafc', cursor: disabled ? 'not-allowed' : 'pointer',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: 16, color: '#4f46e5', flexShrink: 0,
+      transition: 'background 0.15s, border-color 0.15s', opacity: disabled ? 0.4 : 1,
+    }}
+      onMouseEnter={e => { if (!disabled) { e.currentTarget.style.background = '#ede9fe'; e.currentTarget.style.borderColor = '#4f46e5'; } }}
+      onMouseLeave={e => { e.currentTarget.style.background = '#f8fafc'; e.currentTarget.style.borderColor = '#e2e8f0'; }}
+    >{children}</button>
+    {badge > 0 && (
+      <span style={{
+        position: 'absolute', top: -5, right: -5,
+        background: '#4f46e5', color: '#fff', borderRadius: '50%',
+        width: 16, height: 16, fontSize: 9, fontWeight: 700,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        border: '1.5px solid #fff', pointerEvents: 'none',
+      }}>{badge}</span>
+    )}
+  </div>
+);
+
+const fileIcon = (type) => {
+  if (type?.startsWith('image/')) return '🖼️';
+  if (type?.includes('pdf')) return '📕';
+  if (type?.includes('word') || type?.includes('doc')) return '📘';
+  return '📄';
+};
+const isImage = (type) => type?.startsWith('image/');
+
 export default function AIChatbot() {
   const { user } = useAuth();
+  const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([
-    { role: 'assistant', text: "Hi! I'm Dr. AI 👋 I'm here to help you understand health topics, symptoms, and medical questions. What would you like to know?" }
+    { role: 'assistant', text: "Hi! I’m Dr. AI 👋 I’m here to help you understand health topics, symptoms, and medical questions. What would you like to know?" },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [pulse, setPulse] = useState(true);
+
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const fileInputRef = useRef(null);
+
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerItem, setViewerItem] = useState(null);
+
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraStream, setCameraStream] = useState(null);
+  const [facingMode, setFacingMode] = useState('user');
+  const [cameraError, setCameraError] = useState('');
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
-  // Only show for logged-in users
-  if (!user) return null;
+  if (!user || ['/login', '/register'].includes(pathname)) return null;
 
-  // Stop pulsing after first open
+  useEffect(() => { if (open) setPulse(false); }, [open]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
+  useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 100); }, [open]);
   useEffect(() => {
-    if (open) setPulse(false);
-  }, [open]);
+    if (cameraOpen && cameraStream && videoRef.current) videoRef.current.srcObject = cameraStream;
+  }, [cameraOpen, cameraStream]);
 
-  // Scroll to latest message
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
+  const allSharedFiles = messages
+    .filter(m => m.role === 'user' && m.attachments?.length)
+    .flatMap(m => m.attachments);
 
-  // Focus input when opened
-  useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 100);
-  }, [open]);
+  const startCamera = async (mode) => {
+    setCameraError('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode }, audio: false });
+      setCameraStream(stream);
+      if (videoRef.current) videoRef.current.srcObject = stream;
+    } catch { setCameraError('Camera permission denied or not available.'); }
+  };
+  const stopCamera = () => { cameraStream?.getTracks().forEach(t => t.stop()); setCameraStream(null); };
+  const openCamera = () => { setCameraOpen(true); startCamera(facingMode); };
+  const closeCamera = () => { stopCamera(); setCameraOpen(false); setCameraError(''); };
+  const flipCamera = () => { const n = facingMode === 'user' ? 'environment' : 'user'; setFacingMode(n); stopCamera(); startCamera(n); };
+  const capturePhoto = () => {
+    const v = videoRef.current, c = canvasRef.current;
+    if (!v || !c) return;
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext('2d').drawImage(v, 0, 0);
+    setPendingFiles(prev => [...prev, { url: c.toDataURL('image/jpeg', 0.92), name: `photo-${Date.now()}.jpg`, type: 'image/jpeg' }]);
+    closeCamera();
+  };
+
+  const handleFilePick = (e) => {
+    const files = Array.from(e.target.files || []);
+    setPendingFiles(prev => [...prev, ...files.map(f => ({ url: URL.createObjectURL(f), name: f.name, type: f.type }))]);
+    e.target.value = '';
+  };
+  const removePending = (idx) => setPendingFiles(prev => {
+    const n = [...prev];
+    if (n[idx]?.url?.startsWith('blob:')) URL.revokeObjectURL(n[idx].url);
+    n.splice(idx, 1); return n;
+  });
+  const clearPending = () => { pendingFiles.forEach(f => { if (f.url?.startsWith('blob:')) URL.revokeObjectURL(f.url); }); setPendingFiles([]); };
 
   const send = async (text) => {
-    const question = (text || input).trim();
-    if (!question || loading) return;
+    const q = (text || input).trim();
+    if ((!q && !pendingFiles.length) || loading) return;
     setInput('');
-
-    const userMsg = { role: 'user', text: question };
+    const snapped = [...pendingFiles];
+    clearPending();
+    const userMsg = {
+      role: 'user',
+      text: q || (snapped.length > 1 ? `📎 Shared ${snapped.length} files` : '📎 Shared a file'),
+      attachments: snapped.length ? snapped : null,
+    };
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
-
     try {
-      // Send conversation history for multi-turn context
-      const history = [...messages, userMsg].slice(-10);
-      const res = await api.post('/ai-chat', { message: question, history });
+      const history = [...messages, userMsg].slice(-10).map(m => ({ role: m.role, text: m.text }));
+      const res = await api.post('/ai-chat', { message: q || `I shared ${snapped.length} file(s).`, history });
       setMessages(prev => [...prev, { role: 'assistant', text: res.data.answer }]);
     } catch (err) {
-      const status = err?.response?.status;
-      let errText = "Sorry, I couldn't connect right now. Please try again in a moment.";
-      if (status === 401 || status === 403) errText = "Your session expired. Please refresh the page.";
-      setMessages(prev => [...prev, { role: 'assistant', text: errText }]);
-    } finally {
-      setLoading(false);
-    }
+      const s = err?.response?.status;
+      setMessages(prev => [...prev, { role: 'assistant', text: s === 401 || s === 403 ? 'Session expired. Please refresh.' : "Sorry, couldn’t connect. Try again." }]);
+    } finally { setLoading(false); }
   };
-
-  const handleKey = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-  };
+  const handleKey = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } };
 
   return (
     <>
-      {/* Floating bubble button */}
-      <button
-        onClick={() => setOpen(o => !o)}
-        title="Ask Dr. AI"
-        style={{
-          position: 'fixed', bottom: 28, right: 28, zIndex: 9999,
-          width: 60, height: 60, borderRadius: '50%', border: 'none', cursor: 'pointer',
-          background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-          boxShadow: '0 4px 20px rgba(79,70,229,0.5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 26, color: '#fff',
-          animation: pulse ? 'pulseBtn 2s infinite' : 'none',
-          transition: 'transform 0.2s',
-        }}
-        onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.1)'}
-        onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
-      >
+      <style>{`
+        @keyframes pulseBtn{0%,100%{box-shadow:0 4px 20px rgba(79,70,229,0.5);}50%{box-shadow:0 4px 32px rgba(79,70,229,0.9),0 0 0 8px rgba(79,70,229,0.15);}}
+        @keyframes slideUp{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
+        @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+        @keyframes bounce{0%,60%,100%{transform:translateY(0);}30%{transform:translateY(-6px);}}
+        @keyframes spin{to{transform:rotate(360deg);}}
+        .ai-msg{background:#f1f5f9;border-radius:18px 18px 18px 4px;color:#1e293b;}
+        .user-msg{background:linear-gradient(135deg,#4f46e5,#7c3aed);border-radius:18px 18px 4px 18px;color:#fff;}
+        .chat-input:focus{outline:none;} .suggestion-chip:hover{background:#e0e7ff!important;}
+        .fthumbnail:hover{opacity:0.85;transform:scale(1.03);} .vgi:hover .vgi-ov{opacity:1!important;}
+      `}</style>
+
+      {/* Bubble */}
+      <button onClick={() => setOpen(o => !o)} title="Ask Dr. AI" style={{
+        position:'fixed',bottom:28,right:28,zIndex:9999,width:60,height:60,borderRadius:'50%',border:'none',cursor:'pointer',
+        background:'linear-gradient(135deg,#4f46e5,#7c3aed)',boxShadow:'0 4px 20px rgba(79,70,229,0.5)',
+        display:'flex',alignItems:'center',justifyContent:'center',fontSize:26,color:'#fff',
+        animation:pulse?'pulseBtn 2s infinite':'none',transition:'transform 0.2s',
+      }} onMouseEnter={e=>e.currentTarget.style.transform='scale(1.1)'} onMouseLeave={e=>e.currentTarget.style.transform='scale(1)'}>
         {open ? '✕' : '🩺'}
-        <style>{`
-          @keyframes pulseBtn {
-            0%, 100% { box-shadow: 0 4px 20px rgba(79,70,229,0.5); }
-            50% { box-shadow: 0 4px 32px rgba(79,70,229,0.9), 0 0 0 8px rgba(79,70,229,0.15); }
-          }
-        `}</style>
       </button>
 
-      {/* Chat window */}
-      {open && (
-        <div style={{
-          position: 'fixed', bottom: 100, right: 28, zIndex: 9998,
-          width: 380, height: 560, borderRadius: 20,
-          background: '#ffffff', boxShadow: '0 20px 60px rgba(0,0,0,0.18)',
-          display: 'flex', flexDirection: 'column', overflow: 'hidden',
-          animation: 'slideUp 0.25s ease',
-          border: '1px solid #e2e8f0',
-        }}>
-          <style>{`
-            @keyframes slideUp {
-              from { opacity: 0; transform: translateY(20px); }
-              to   { opacity: 1; transform: translateY(0); }
-            }
-            .ai-msg { background: #f1f5f9; border-radius: 18px 18px 18px 4px; color: #1e293b; }
-            .user-msg { background: linear-gradient(135deg,#4f46e5,#7c3aed); border-radius: 18px 18px 4px 18px; color: #fff; }
-            .chat-input:focus { outline: none; }
-            .suggestion-chip:hover { background: #e0e7ff !important; }
-          `}</style>
+      {/* Camera Modal */}
+      {cameraOpen && (
+        <div style={{position:'fixed',inset:0,zIndex:10002,background:'rgba(0,0,0,0.88)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{background:'#0f172a',borderRadius:20,overflow:'hidden',width:360,display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.5)'}}>
+            <div style={{background:'linear-gradient(135deg,#4f46e5,#7c3aed)',padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+              <span style={{color:'#fff',fontWeight:700,fontSize:14}}>📷 Live Camera</span>
+              <button onClick={closeCamera} style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',borderRadius:8,width:28,height:28,cursor:'pointer',fontSize:13,display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+            </div>
+            <div style={{background:'#000',lineHeight:0}}>
+              {cameraError ? <div style={{padding:'2rem',textAlign:'center',color:'#f87171',fontSize:13}}>⚠️ {cameraError}</div>
+                : <video ref={videoRef} autoPlay playsInline muted style={{width:'100%',maxHeight:280,objectFit:'cover',display:'block'}}/>}
+              <canvas ref={canvasRef} style={{display:'none'}}/>
+            </div>
+            <div style={{padding:'14px 16px',display:'flex',gap:10,alignItems:'center',justifyContent:'center',background:'#1e293b'}}>
+              <button onClick={flipCamera} style={{width:42,height:42,borderRadius:'50%',border:'2px solid #475569',background:'#334155',color:'#cbd5e1',fontSize:18,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>🔄</button>
+              <button onClick={capturePhoto} disabled={!!cameraError} style={{width:62,height:62,borderRadius:'50%',border:'4px solid #fff',background:'linear-gradient(135deg,#4f46e5,#7c3aed)',color:'#fff',fontSize:26,cursor:cameraError?'not-allowed':'pointer',display:'flex',alignItems:'center',justifyContent:'center',boxShadow:'0 4px 16px rgba(79,70,229,0.5)',opacity:cameraError?0.5:1}}>📸</button>
+              <button onClick={closeCamera} style={{width:42,height:42,borderRadius:'50%',border:'2px solid #475569',background:'#334155',color:'#cbd5e1',fontSize:18,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+            </div>
+          </div>
+        </div>
+      )}
 
+      {/* File Viewer Modal */}
+      {viewerOpen && (
+        <div style={{position:'fixed',inset:0,zIndex:10001,background:'rgba(0,0,0,0.72)',display:'flex',alignItems:'center',justifyContent:'center',animation:'fadeIn 0.2s ease'}}
+          onClick={e=>{if(e.target===e.currentTarget){setViewerItem(null);setViewerOpen(false);}}}>
+          {viewerItem ? (
+            <div style={{position:'relative',maxWidth:'90vw',maxHeight:'90vh',display:'flex',flexDirection:'column',alignItems:'center'}}>
+              <button onClick={()=>setViewerItem(null)} style={{position:'absolute',top:-40,left:0,background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',borderRadius:8,padding:'5px 14px',cursor:'pointer',fontSize:12,fontWeight:600}}>← All files</button>
+              <button onClick={()=>{setViewerItem(null);setViewerOpen(false);}} style={{position:'absolute',top:-40,right:0,background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',borderRadius:8,padding:'5px 14px',cursor:'pointer',fontSize:12}}>✕ Close</button>
+              {isImage(viewerItem.type)
+                ? <img src={viewerItem.url} alt={viewerItem.name} style={{maxWidth:'88vw',maxHeight:'78vh',borderRadius:16,objectFit:'contain',boxShadow:'0 8px 40px rgba(0,0,0,0.5)'}}/>
+                : <div style={{background:'#1e293b',borderRadius:16,padding:'3rem 4rem',display:'flex',flexDirection:'column',alignItems:'center',gap:16}}>
+                    <span style={{fontSize:64}}>{fileIcon(viewerItem.type)}</span>
+                    <div style={{color:'#e2e8f0',fontWeight:600,fontSize:15}}>{viewerItem.name}</div>
+                    <a href={viewerItem.url} download={viewerItem.name} style={{padding:'8px 24px',background:'linear-gradient(135deg,#4f46e5,#7c3aed)',color:'#fff',borderRadius:10,textDecoration:'none',fontSize:13,fontWeight:600}}>⬇ Download</a>
+                  </div>}
+              <div style={{color:'rgba(255,255,255,0.6)',fontSize:12,marginTop:10}}>{viewerItem.name}</div>
+            </div>
+          ) : (
+            <div style={{background:'#fff',borderRadius:20,overflow:'hidden',width:420,maxHeight:'80vh',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+              <div style={{background:'linear-gradient(135deg,#4f46e5,#7c3aed)',padding:'14px 18px',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+                <div>
+                  <div style={{color:'#fff',fontWeight:700,fontSize:15}}>📁 My Shared Files</div>
+                  <div style={{color:'rgba(255,255,255,0.7)',fontSize:11,marginTop:2}}>{allSharedFiles.length} file{allSharedFiles.length!==1?'s':''} in this session</div>
+                </div>
+                <button onClick={()=>setViewerOpen(false)} style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',borderRadius:8,width:30,height:30,cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+              </div>
+              <div style={{flex:1,overflowY:'auto',padding:16}}>
+                {allSharedFiles.length===0 ? (
+                  <div style={{textAlign:'center',padding:'3rem 1rem',color:'#94a3b8'}}>
+                    <div style={{fontSize:48,marginBottom:12}}>🔍</div>
+                    <div style={{fontWeight:600,marginBottom:4}}>No files shared yet</div>
+                    <div style={{fontSize:12}}>Use 📎 or 📷 in the chat to share files</div>
+                  </div>
+                ) : (
+                  <>
+                    {allSharedFiles.filter(f=>isImage(f.type)).length>0&&(
+                      <>
+                        <div style={{fontSize:11,fontWeight:700,color:'#64748b',marginBottom:8,textTransform:'uppercase',letterSpacing:'0.05em'}}>Images</div>
+                        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:16}}>
+                          {allSharedFiles.filter(f=>isImage(f.type)).map((f,i)=>(
+                            <div key={i} className="vgi" onClick={()=>setViewerItem(f)} style={{position:'relative',cursor:'pointer',borderRadius:10,overflow:'hidden',aspectRatio:'1',background:'#f1f5f9'}}>
+                              <img src={f.url} alt={f.name} style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>
+                              <div className="vgi-ov" style={{position:'absolute',inset:0,background:'rgba(79,70,229,0.55)',display:'flex',alignItems:'center',justifyContent:'center',opacity:0,transition:'opacity 0.15s',fontSize:22}}>🔍</div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                    {allSharedFiles.filter(f=>!isImage(f.type)).length>0&&(
+                      <>
+                        <div style={{fontSize:11,fontWeight:700,color:'#64748b',marginBottom:8,textTransform:'uppercase',letterSpacing:'0.05em'}}>Documents</div>
+                        <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                          {allSharedFiles.filter(f=>!isImage(f.type)).map((f,i)=>(
+                            <div key={i} onClick={()=>setViewerItem(f)} style={{display:'flex',alignItems:'center',gap:10,background:'#f8fafc',borderRadius:12,padding:'10px 12px',border:'1px solid #e2e8f0',cursor:'pointer'}}>
+                              <span style={{fontSize:24}}>{fileIcon(f.type)}</span>
+                              <div style={{flex:1,overflow:'hidden'}}>
+                                <div style={{fontSize:13,fontWeight:600,color:'#1e293b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f.name}</div>
+                                <div style={{fontSize:11,color:'#94a3b8'}}>Tap to view / download</div>
+                              </div>
+                              <span style={{fontSize:18,color:'#94a3b8'}}>›</span>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Chat Window */}
+      {open && (
+        <div style={{position:'fixed',bottom:100,right:28,zIndex:9998,width:400,maxHeight:660,borderRadius:20,background:'#ffffff',boxShadow:'0 20px 60px rgba(0,0,0,0.18)',display:'flex',flexDirection:'column',overflow:'hidden',animation:'slideUp 0.25s ease',border:'1px solid #e2e8f0'}}>
           {/* Header */}
-          <div style={{
-            background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-            padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12,
-          }}>
-            <div style={{
-              width: 40, height: 40, borderRadius: '50%', background: 'rgba(255,255,255,0.2)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20
-            }}>🩺</div>
+          <div style={{background:'linear-gradient(135deg,#4f46e5,#7c3aed)',padding:'14px 18px',display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
+            <div style={{width:40,height:40,borderRadius:'50%',background:'rgba(255,255,255,0.2)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}}>🩺</div>
             <div>
-              <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>Dr. AI Assistant</div>
-              <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: 12 }}>
-                <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
-                  background: '#4ade80', marginRight: 5, verticalAlign: 'middle' }} />
+              <div style={{color:'#fff',fontWeight:700,fontSize:15}}>Dr. AI Assistant</div>
+              <div style={{color:'rgba(255,255,255,0.75)',fontSize:12}}>
+                <span style={{display:'inline-block',width:7,height:7,borderRadius:'50%',background:'#4ade80',marginRight:5,verticalAlign:'middle'}}/>
                 Online · Powered by Gemini
               </div>
             </div>
-            <button onClick={() => setOpen(false)} style={{
-              marginLeft: 'auto', background: 'rgba(255,255,255,0.15)', border: 'none',
-              color: '#fff', borderRadius: 8, width: 30, height: 30, cursor: 'pointer',
-              fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center'
-            }}>✕</button>
+            <div style={{marginLeft:'auto',display:'flex',gap:6,alignItems:'center'}}>
+              <button onClick={()=>setViewerOpen(true)} title="View shared files" style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',borderRadius:8,padding:'5px 10px',cursor:'pointer',fontSize:12,display:'flex',alignItems:'center',gap:4,fontWeight:600}}>
+                📁 {allSharedFiles.length>0&&<span style={{background:'#fbbf24',color:'#1e293b',borderRadius:20,fontSize:10,fontWeight:800,padding:'1px 5px'}}>{allSharedFiles.length}</span>}
+              </button>
+              <button onClick={()=>setOpen(false)} style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',borderRadius:8,width:30,height:30,cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+            </div>
           </div>
 
           {/* Messages */}
-          <div style={{
-            flex: 1, overflowY: 'auto', padding: '16px 14px', display: 'flex',
-            flexDirection: 'column', gap: 4, background: '#fafbff',
-          }}>
-            {messages.map((m, i) => (
-              <div key={i} style={{
-                display: 'flex',
-                justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start',
-                marginBottom: 6,
-              }}>
-                {m.role === 'assistant' && (
-                  <div style={{
-                    width: 28, height: 28, borderRadius: '50%', background: '#e0e7ff',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 14, marginRight: 8, flexShrink: 0, alignSelf: 'flex-end'
-                  }}>🩺</div>
-                )}
-                <div className={m.role === 'user' ? 'user-msg' : 'ai-msg'} style={{
-                  padding: '10px 14px', maxWidth: '82%', fontSize: 13.5,
-                  lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                }}>
-                  {m.text}
+          <div style={{flex:1,overflowY:'auto',padding:'16px 14px',display:'flex',flexDirection:'column',gap:4,background:'#fafbff'}}>
+            {messages.map((m,i)=>(
+              <div key={i} style={{display:'flex',justifyContent:m.role==='user'?'flex-end':'flex-start',marginBottom:6}}>
+                {m.role==='assistant'&&<div style={{width:28,height:28,borderRadius:'50%',background:'#e0e7ff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,marginRight:8,flexShrink:0,alignSelf:'flex-end'}}>🩺</div>}
+                <div style={{display:'flex',flexDirection:'column',alignItems:m.role==='user'?'flex-end':'flex-start',maxWidth:'85%'}}>
+                  {m.attachments?.length>0&&(
+                    <div style={{marginBottom:m.text?4:0}}>
+                      {m.attachments.filter(a=>isImage(a.type)).length>0&&(
+                        <div style={{display:'grid',gridTemplateColumns:m.attachments.filter(a=>isImage(a.type)).length===1?'1fr':'repeat(2,1fr)',gap:4,marginBottom:4}}>
+                          {m.attachments.filter(a=>isImage(a.type)).map((a,ai)=>(
+                            <img key={ai} src={a.url} alt={a.name} className="fthumbnail"
+                              style={{width:'100%',maxWidth:190,height:120,borderRadius:12,objectFit:'cover',cursor:'pointer',border:'2px solid #e0e7ff',display:'block',transition:'opacity 0.15s,transform 0.15s'}}
+                              onClick={()=>{setViewerItem(a);setViewerOpen(true);}}/>
+                          ))}
+                        </div>
+                      )}
+                      {m.attachments.filter(a=>!isImage(a.type)).map((a,ai)=>(
+                        <div key={ai} onClick={()=>{setViewerItem(a);setViewerOpen(true);}} style={{display:'flex',alignItems:'center',gap:8,background:'#ede9fe',borderRadius:12,padding:'8px 12px',border:'1px solid #c4b5fd',marginBottom:4,cursor:'pointer'}}>
+                          <span style={{fontSize:20}}>{fileIcon(a.type)}</span>
+                          <span style={{fontSize:12,color:'#4f46e5',fontWeight:600,maxWidth:150,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.name}</span>
+                          <span style={{fontSize:14,color:'#7c3aed',marginLeft:'auto'}}>🔍</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {m.text&&<div className={m.role==='user'?'user-msg':'ai-msg'} style={{padding:'10px 14px',fontSize:13.5,lineHeight:1.55,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{m.text}</div>}
                 </div>
               </div>
             ))}
-
-            {loading && (
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
-                <div style={{
-                  width: 28, height: 28, borderRadius: '50%', background: '#e0e7ff',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14
-                }}>🩺</div>
-                <TypingIndicator />
+            {loading&&(
+              <div style={{display:'flex',alignItems:'flex-end',gap:8}}>
+                <div style={{width:28,height:28,borderRadius:'50%',background:'#e0e7ff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>🩺</div>
+                <TypingIndicator/>
               </div>
             )}
-
-            {/* Suggestion chips — show only when only welcome message exists */}
-            {messages.length === 1 && !loading && (
-              <div style={{ marginTop: 12 }}>
-                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8, paddingLeft: 36 }}>
-                  Try asking:
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: 36 }}>
-                  {SUGGESTIONS.map((s, i) => (
-                    <button key={i} className="suggestion-chip" onClick={() => send(s)} style={{
-                      background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 20,
-                      padding: '5px 12px', fontSize: 12, cursor: 'pointer', color: '#475569',
-                      transition: 'background 0.15s',
-                    }}>{s}</button>
+            {messages.length===1&&!loading&&(
+              <div style={{marginTop:12}}>
+                <div style={{fontSize:11,color:'#94a3b8',marginBottom:8,paddingLeft:36}}>Try asking:</div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:6,paddingLeft:36}}>
+                  {SUGGESTIONS.map((s,i)=>(
+                    <button key={i} className="suggestion-chip" onClick={()=>send(s)} style={{background:'#f1f5f9',border:'1px solid #e2e8f0',borderRadius:20,padding:'5px 12px',fontSize:12,cursor:'pointer',color:'#475569',transition:'background 0.15s'}}>{s}</button>
                   ))}
                 </div>
               </div>
             )}
-
-            <div ref={bottomRef} />
+            <div ref={bottomRef}/>
           </div>
 
+          {/* Pending files bar */}
+          {pendingFiles.length>0&&(
+            <div style={{padding:'8px 12px',borderTop:'1px solid #e2e8f0',background:'#f8faff',flexShrink:0}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                <span style={{fontSize:11,fontWeight:700,color:'#4f46e5'}}>{pendingFiles.length} file{pendingFiles.length>1?'s':''} ready to send</span>
+                <button onClick={clearPending} style={{background:'none',border:'none',fontSize:11,color:'#ef4444',cursor:'pointer',fontWeight:600}}>Clear all</button>
+              </div>
+              <div style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:4}}>
+                {pendingFiles.map((f,idx)=>(
+                  <div key={idx} style={{position:'relative',flexShrink:0}}>
+                    {isImage(f.type)
+                      ? <img src={f.url} alt={f.name} style={{width:52,height:52,borderRadius:10,objectFit:'cover',border:'1.5px solid #c4b5fd',display:'block'}}/>
+                      : <div style={{width:52,height:52,borderRadius:10,background:'#ede9fe',border:'1.5px solid #c4b5fd',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2}}>
+                          <span style={{fontSize:18}}>{fileIcon(f.type)}</span>
+                          <span style={{fontSize:8,color:'#7c3aed',fontWeight:700,maxWidth:46,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textAlign:'center',padding:'0 2px'}}>{f.name.split('.').pop().toUpperCase()}</span>
+                        </div>}
+                    <button onClick={()=>removePending(idx)} style={{position:'absolute',top:-5,right:-5,background:'#ef4444',border:'1.5px solid #fff',color:'#fff',borderRadius:'50%',width:16,height:16,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,padding:0}}>✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Input area */}
-          <div style={{
-            padding: '10px 12px', borderTop: '1px solid #e2e8f0',
-            display: 'flex', gap: 8, alignItems: 'flex-end', background: '#fff',
-          }}>
-            <textarea
-              ref={inputRef}
-              className="chat-input"
-              rows={1}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKey}
-              placeholder="Ask a health question…"
-              style={{
-                flex: 1, resize: 'none', border: '1.5px solid #e2e8f0',
-                borderRadius: 12, padding: '9px 12px', fontSize: 13.5,
-                fontFamily: 'inherit', background: '#f8fafc', color: '#1e293b',
-                maxHeight: 100, lineHeight: 1.4, transition: 'border 0.2s',
-              }}
-              onFocus={e => e.target.style.borderColor = '#4f46e5'}
-              onBlur={e => e.target.style.borderColor = '#e2e8f0'}
-            />
-            <button
-              onClick={() => send()}
-              disabled={!input.trim() || loading}
-              style={{
-                width: 40, height: 40, borderRadius: 12, border: 'none', cursor: 'pointer',
-                background: (!input.trim() || loading) ? '#e2e8f0' : 'linear-gradient(135deg,#4f46e5,#7c3aed)',
-                color: '#fff', fontSize: 18, display: 'flex', alignItems: 'center',
-                justifyContent: 'center', flexShrink: 0, transition: 'background 0.2s',
-              }}
-            >
-              {loading ? (
-                <span style={{ width: 16, height: 16, border: '2px solid #fff',
-                  borderTopColor: 'transparent', borderRadius: '50%',
-                  animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
-              ) : '➤'}
-              <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-            </button>
+          <div style={{padding:'10px 12px',borderTop:'1px solid #e2e8f0',background:'#fff',flexShrink:0}}>
+            <div style={{display:'flex',gap:6,marginBottom:8,alignItems:'center'}}>
+              <ToolBtn title="Attach multiple files / images" onClick={()=>fileInputRef.current?.click()}>📎</ToolBtn>
+              <input ref={fileInputRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt" multiple style={{display:'none'}} onChange={handleFilePick}/>
+              <ToolBtn title="Take a live photo" onClick={openCamera}>📷</ToolBtn>
+              <ToolBtn title="View all shared files" onClick={()=>setViewerOpen(true)} badge={allSharedFiles.length}>📁</ToolBtn>
+              <span style={{flex:1}}/>
+              <span style={{fontSize:11,color:'#94a3b8'}}>images, PDFs &amp; docs</span>
+            </div>
+            <div style={{display:'flex',gap:8,alignItems:'flex-end'}}>
+              <textarea ref={inputRef} className="chat-input" rows={1} value={input}
+                onChange={e=>setInput(e.target.value)} onKeyDown={handleKey}
+                placeholder="Ask a health question…"
+                style={{flex:1,resize:'none',border:'1.5px solid #e2e8f0',borderRadius:12,padding:'9px 12px',fontSize:13.5,fontFamily:'inherit',background:'#f8fafc',color:'#1e293b',maxHeight:100,lineHeight:1.4,transition:'border 0.2s'}}
+                onFocus={e=>e.target.style.borderColor='#4f46e5'} onBlur={e=>e.target.style.borderColor='#e2e8f0'}/>
+              <button onClick={()=>send()} disabled={(!input.trim()&&!pendingFiles.length)||loading} style={{
+                width:40,height:40,borderRadius:12,border:'none',cursor:'pointer',
+                background:((!input.trim()&&!pendingFiles.length)||loading)?'#e2e8f0':'linear-gradient(135deg,#4f46e5,#7c3aed)',
+                color:'#fff',fontSize:18,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,transition:'background 0.2s',
+              }}>
+                {loading?<span style={{width:16,height:16,border:'2px solid #fff',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 0.7s linear infinite',display:'inline-block'}}/>:'➤'}
+              </button>
+            </div>
           </div>
         </div>
       )}
