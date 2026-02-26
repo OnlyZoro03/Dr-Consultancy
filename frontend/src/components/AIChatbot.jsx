@@ -207,10 +207,17 @@ export default function AIChatbot() {
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const sessionIdRef = useRef(null);
+  const recognitionRef = useRef(null);
 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [currentSessionId, setCurrentSessionId] = useState(null);
+
+  const [recording, setRecording] = useState(false);
+  const [voiceInterim, setVoiceInterim] = useState('');
+  const [speechSupported] = useState(
+    () => typeof window !== 'undefined' && ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)
+  );
 
   useEffect(() => { if (open) setPulse(false); }, [open]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
@@ -225,10 +232,37 @@ export default function AIChatbot() {
       setSessions(stored);
     } catch { setSessions([]); }
   }, [user]);
+  useEffect(() => () => { recognitionRef.current?.abort(); }, []);
 
   if (!user || ['/login', '/register'].includes(pathname)) return null;
 
   const historyKey = `dr_ai_history_${user.uid}`;
+
+  // ── Voice input helpers ────────────────────────────────────────────────────
+  const startVoice = () => {
+    if (!speechSupported) return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    recognitionRef.current = rec;
+    rec.lang = navigator.language || 'en-US';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.onstart = () => setRecording(true);
+    rec.onresult = (e) => {
+      let fin = '', interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) fin += t + ' ';
+        else interim = t;
+      }
+      if (fin) setInput(prev => prev + fin);
+      setVoiceInterim(interim);
+    };
+    rec.onerror = (e) => { if (e.error !== 'aborted') console.warn('[Voice]', e.error); setRecording(false); setVoiceInterim(''); };
+    rec.onend = () => { setRecording(false); setVoiceInterim(''); };
+    rec.start();
+  };
+  const stopVoice = () => { recognitionRef.current?.stop(); setRecording(false); setVoiceInterim(''); };
 
   const allSharedFiles = messages
     .filter(m => m.role === 'user' && m.attachments?.length)
@@ -342,8 +376,7 @@ export default function AIChatbot() {
         @keyframes slideUp{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
         @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
         @keyframes bounce{0%,60%,100%{transform:translateY(0);}30%{transform:translateY(-6px);}}
-        @keyframes spin{to{transform:rotate(360deg);}}
-        .ai-msg{background:#f1f5f9;border-radius:18px 18px 18px 4px;color:#1e293b;}
+        @keyframes spin{to{transform:rotate(360deg);}}        @keyframes micPulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,0.5);}50%{box-shadow:0 0 0 6px rgba(239,68,68,0.15),0 2px 14px rgba(239,68,68,0.6);}}        .ai-msg{background:#f1f5f9;border-radius:18px 18px 18px 4px;color:#1e293b;}
         .user-msg{background:linear-gradient(135deg,#4f46e5,#7c3aed);border-radius:18px 18px 4px 18px;color:#fff;}
         .chat-input:focus{outline:none;} .suggestion-chip:hover{background:#e0e7ff!important;}
         .fthumbnail:hover{opacity:0.85;transform:scale(1.03);} .vgi:hover .vgi-ov{opacity:1!important;}
@@ -603,9 +636,37 @@ export default function AIChatbot() {
               <input ref={fileInputRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt" multiple style={{display:'none'}} onChange={handleFilePick}/>
               <ToolBtn title="Take a live photo" onClick={openCamera}>📷</ToolBtn>
               <ToolBtn title="View all shared files" onClick={()=>setViewerOpen(true)} badge={allSharedFiles.length}>📁</ToolBtn>
+              {/* Mic button — integrated voice input */}
+              <div style={{position:'relative',display:'inline-flex'}}>
+                <button
+                  title={!speechSupported?'Speech not supported in this browser':recording?'Stop recording':'Voice input — speak your symptoms'}
+                  onClick={recording?stopVoice:startVoice}
+                  disabled={!speechSupported}
+                  style={{
+                    width:34,height:34,borderRadius:10,border:'1.5px solid',borderColor:recording?'#ef4444':'#e2e8f0',
+                    background:recording?'#fef2f2':'#f8fafc',cursor:speechSupported?'pointer':'not-allowed',
+                    display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,
+                    color:recording?'#ef4444':'#4f46e5',flexShrink:0,
+                    animation:recording?'micPulse 1.2s infinite':'none',
+                    transition:'background 0.15s,border-color 0.15s',
+                    opacity:speechSupported?1:0.4,
+                  }}
+                  onMouseEnter={e=>{if(speechSupported&&!recording){e.currentTarget.style.background='#ede9fe';e.currentTarget.style.borderColor='#4f46e5';}}}
+                  onMouseLeave={e=>{if(!recording){e.currentTarget.style.background='#f8fafc';e.currentTarget.style.borderColor='#e2e8f0';}}}
+                >{recording?'⏹':'🎙️'}</button>
+                {recording&&<span style={{position:'absolute',top:-4,right:-4,width:10,height:10,borderRadius:'50%',background:'#ef4444',border:'1.5px solid #fff'}}/>}
+              </div>
               <span style={{flex:1}}/>
-              <span style={{fontSize:11,color:'#94a3b8'}}>images, PDFs &amp; docs</span>
+              <span style={{fontSize:11,color:recording?'#ef4444':'#94a3b8',fontWeight:recording?700:400,transition:'color 0.2s'}}>
+                {recording?'🔴 Listening…':'images, PDFs &amp; docs'}
+              </span>
             </div>
+            {/* Interim voice text preview */}
+            {voiceInterim&&(
+              <div style={{marginBottom:6,padding:'5px 12px',background:'#fef2f2',borderRadius:8,border:'1px solid #fca5a5',fontSize:12,color:'#991b1b',fontStyle:'italic'}}>
+                🎙️ {voiceInterim}
+              </div>
+            )}
             <div style={{display:'flex',gap:8,alignItems:'flex-end'}}>
               <textarea ref={inputRef} className="chat-input" rows={1} value={input}
                 onChange={e=>setInput(e.target.value)} onKeyDown={handleKey}

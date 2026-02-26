@@ -9,7 +9,6 @@ import ReportAnalysis from './pages/ReportAnalysis';
 import ProtectedRoute from './components/ProtectedRoute';
 import { AuthProvider } from './context/AuthContext';
 import AIChatbot from './components/AIChatbot';
-import VoiceTriageAssistant from './components/VoiceTriageAssistant';
 
 function App() {
   return (
@@ -17,7 +16,6 @@ function App() {
       <Router>
         <div className="font-sans text-gray-900 antialiased">
           <AIChatbot />
-          <VoiceTriageAssistant />
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
