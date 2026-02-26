@@ -57,6 +57,130 @@ const fileIcon = (type) => {
 };
 const isImage = (type) => type?.startsWith('image/');
 
+// ─── Structured AI Response Renderer ────────────────────────────────────────
+const RISK_CFG = {
+  low:      { label: 'Low Risk',                bg: '#f0fdf4', border: '#bbf7d0', text: '#15803d', dot: '#22c55e' },
+  medium:   { label: 'Moderate Risk',           bg: '#fffbeb', border: '#fde68a', text: '#b45309', dot: '#f59e0b' },
+  high:     { label: 'High Risk',               bg: '#fff7ed', border: '#fed7aa', text: '#c2410c', dot: '#f97316' },
+  critical: { label: 'Critical — See a Doctor', bg: '#fef2f2', border: '#fecaca', text: '#b91c1c', dot: '#ef4444' },
+};
+const STATUS_BAR = {
+  normal:   { pct: 44, color: '#22c55e', label: 'Normal' },
+  low:      { pct: 13, color: '#3b82f6', label: 'Below Normal' },
+  elevated: { pct: 67, color: '#f59e0b', label: 'Elevated' },
+  high:     { pct: 82, color: '#f97316', label: 'High' },
+  critical: { pct: 95, color: '#ef4444', label: 'Critical' },
+};
+
+const StructuredMessage = ({ text }) => {
+  let d = null;
+  try { d = JSON.parse(text); } catch {}
+  if (!d || typeof d !== 'object' || (!d.bullets && !d.risk && !d.summary)) {
+    return <div style={{padding:'10px 14px',fontSize:13.5,lineHeight:1.55,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{text}</div>;
+  }
+  const riskLevel = typeof d.risk === 'string' ? d.risk : d.risk?.level;
+  const riskLabel = (typeof d.risk === 'object' && d.risk?.label) || RISK_CFG[riskLevel]?.label;
+  const rc = RISK_CFG[riskLevel];
+  return (
+    <div style={{padding:'12px 14px',display:'flex',flexDirection:'column',gap:11,fontSize:13,lineHeight:1.5}}>
+      {/* Risk Badge */}
+      {rc && (
+        <div style={{display:'inline-flex',alignItems:'center',gap:7,
+          background:rc.bg,border:`1.5px solid ${rc.border}`,color:rc.text,
+          borderRadius:20,padding:'5px 13px',fontWeight:700,fontSize:12,width:'fit-content'}}>
+          <span style={{width:8,height:8,borderRadius:'50%',background:rc.dot,display:'inline-block',flexShrink:0}}/>
+          {riskLabel}
+        </div>
+      )}
+      {/* Summary */}
+      {d.summary && <div style={{fontWeight:600,color:'#1e293b',fontSize:13.5,lineHeight:1.45}}>{d.summary}</div>}
+      {/* Key Points */}
+      {d.bullets?.length > 0 && (
+        <div>
+          <div style={{fontSize:10.5,fontWeight:800,color:'#64748b',textTransform:'uppercase',letterSpacing:'0.07em',marginBottom:6}}>📋 Key Points</div>
+          <div style={{display:'flex',flexDirection:'column',gap:5}}>
+            {d.bullets.map((b,i) => (
+              <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start'}}>
+                <span style={{width:6,height:6,borderRadius:'50%',background:'#4f46e5',marginTop:5,flexShrink:0}}/>
+                <span style={{color:'#374151',fontSize:13}}>{b}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {/* Contributing Factors */}
+      {d.factors?.length > 0 && (
+        <div style={{background:'#fffbeb',borderRadius:10,padding:'9px 12px',border:'1px solid #fde68a'}}>
+          <div style={{fontSize:10.5,fontWeight:800,color:'#92400e',textTransform:'uppercase',letterSpacing:'0.07em',marginBottom:6}}>⚠ Contributing Factors</div>
+          <div style={{display:'flex',flexDirection:'column',gap:4}}>
+            {d.factors.map((f,i) => (
+              <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start'}}>
+                <span style={{color:'#d97706',fontSize:12,flexShrink:0,marginTop:1}}>▸</span>
+                <span style={{color:'#78350f',fontSize:12.5}}>{f}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {/* Vitals Comparison */}
+      {d.vitals?.length > 0 && (
+        <div>
+          <div style={{fontSize:10.5,fontWeight:800,color:'#64748b',textTransform:'uppercase',letterSpacing:'0.07em',marginBottom:7}}>📊 Vitals Comparison</div>
+          <div style={{display:'flex',flexDirection:'column',gap:7}}>
+            {d.vitals.map((v,i) => {
+              const sb = STATUS_BAR[v.status] || STATUS_BAR.normal;
+              return (
+                <div key={i} style={{background:'#f8fafc',borderRadius:10,padding:'8px 11px',border:'1px solid #e2e8f0'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}}>
+                    <span style={{fontSize:12,fontWeight:600,color:'#374151'}}>{v.name}</span>
+                    <div style={{display:'flex',gap:7,alignItems:'center'}}>
+                      <span style={{fontSize:12.5,fontWeight:700,color:sb.color}}>
+                        {v.value}{v.unit ? ' '+v.unit : ''}
+                      </span>
+                      <span style={{fontSize:10,color:'#94a3b8',borderLeft:'1px solid #e2e8f0',paddingLeft:7}}>
+                        Normal: {v.normal}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{background:'#e2e8f0',borderRadius:6,height:7,overflow:'hidden',position:'relative'}}>
+                    <div style={{width:`${sb.pct}%`,height:'100%',background:sb.color,borderRadius:6}}/>
+                  </div>
+                  <div style={{display:'flex',justifyContent:'space-between',marginTop:3}}>
+                    <span style={{fontSize:10,color:sb.color,fontWeight:700}}>{sb.label}</span>
+                    <span style={{fontSize:10,color:'#cbd5e1'}}>Low ←───────→ Critical</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {/* Advice */}
+      {d.advice?.length > 0 && (
+        <div style={{background:'#f0fdf4',borderRadius:10,padding:'9px 12px',border:'1px solid #bbf7d0'}}>
+          <div style={{fontSize:10.5,fontWeight:800,color:'#166534',textTransform:'uppercase',letterSpacing:'0.07em',marginBottom:6}}>✅ What You Should Do</div>
+          <div style={{display:'flex',flexDirection:'column',gap:5}}>
+            {d.advice.map((a,i) => (
+              <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start'}}>
+                <span style={{background:'#22c55e',color:'#fff',borderRadius:'50%',width:16,height:16,
+                  display:'flex',alignItems:'center',justifyContent:'center',
+                  fontSize:9,fontWeight:800,flexShrink:0,marginTop:1}}>{i+1}</span>
+                <span style={{color:'#166534',fontSize:12.5}}>{a}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {/* Disclaimer */}
+      {d.disclaimer && (
+        <div style={{fontSize:11,color:'#94a3b8',fontStyle:'italic',borderTop:'1px solid #e2e8f0',paddingTop:8,marginTop:2}}>
+          {d.disclaimer}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function AIChatbot() {
   const { user } = useAuth();
   const { pathname } = useLocation();
@@ -422,7 +546,11 @@ export default function AIChatbot() {
                       ))}
                     </div>
                   )}
-                  {m.text&&<div className={m.role==='user'?'user-msg':'ai-msg'} style={{padding:'10px 14px',fontSize:13.5,lineHeight:1.55,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{m.text}</div>}
+                  {m.text&&(
+                    m.role==='user'
+                      ? <div className="user-msg" style={{padding:'10px 14px',fontSize:13.5,lineHeight:1.55,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{m.text}</div>
+                      : <div className="ai-msg"><StructuredMessage text={m.text}/></div>
+                  )}
                 </div>
               </div>
             ))}
