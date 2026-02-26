@@ -215,9 +215,15 @@ export default function AIChatbot() {
 
   const [recording, setRecording] = useState(false);
   const [voiceInterim, setVoiceInterim] = useState('');
+  const [voiceError, setVoiceError] = useState('');
+  const [voiceLang, setVoiceLang] = useState('en-IN');
   const [speechSupported] = useState(
     () => typeof window !== 'undefined' && ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)
   );
+  const silenceTimerRef   = useRef(null);
+  const lastSpeechRef     = useRef(null);
+  const intentionalStop   = useRef(false);
+  const sessionFinalRef   = useRef(''); // tracks what we've already appended this session
 
   useEffect(() => { if (open) setPulse(false); }, [open]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
@@ -232,37 +238,137 @@ export default function AIChatbot() {
       setSessions(stored);
     } catch { setSessions([]); }
   }, [user]);
-  useEffect(() => () => { recognitionRef.current?.abort(); }, []);
+  useEffect(() => () => {
+    recognitionRef.current?.abort();
+    clearTimeout(silenceTimerRef.current);
+  }, []);
 
   if (!user || ['/login', '/register'].includes(pathname)) return null;
 
   const historyKey = `dr_ai_history_${user.uid}`;
 
-  // ── Voice input helpers ────────────────────────────────────────────────────
-  const startVoice = () => {
-    if (!speechSupported) return;
+  // ── Filler-word cleaner ─────────────────────────────────────────────────────────
+  const cleanTranscript = (t) => {
+    const FILLERS = /\b(um+|uh+|uhh+|hmm+|like|actually|basically|you know|so|well|right|okay)\b/gi;
+    return t.replace(FILLERS, '').replace(/\s{2,}/g, ' ').trim();
+  };
+
+  // ── Silence auto-stop (3 s) ────────────────────────────────────────────────────
+  const resetSilenceTimer = () => {
+    clearTimeout(silenceTimerRef.current);
+    lastSpeechRef.current = Date.now();
+    silenceTimerRef.current = setTimeout(() => {
+      // 3 s of silence → stop gracefully
+      if (recognitionRef.current) { intentionalStop.current = true; recognitionRef.current.stop(); }
+    }, 3000);
+  };
+
+  // ── Build a fresh recognition instance ───────────────────────────────────────────
+  const createRecognition = (lang) => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new SR();
-    recognitionRef.current = rec;
-    rec.lang = navigator.language || 'en-US';
+    rec.lang = lang;
     rec.continuous = true;
     rec.interimResults = true;
-    rec.onstart = () => setRecording(true);
-    rec.onresult = (e) => {
-      let fin = '', interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) fin += t + ' ';
-        else interim = t;
-      }
-      if (fin) setInput(prev => prev + fin);
-      setVoiceInterim(interim);
+    rec.maxAlternatives = 1;
+
+    rec.onstart = () => {
+      setRecording(true);
+      setVoiceError('');
+      lastSpeechRef.current = Date.now();
+      resetSilenceTimer();
     };
-    rec.onerror = (e) => { if (e.error !== 'aborted') console.warn('[Voice]', e.error); setRecording(false); setVoiceInterim(''); };
-    rec.onend = () => { setRecording(false); setVoiceInterim(''); };
-    rec.start();
+
+    rec.onresult = (e) => {
+      resetSilenceTimer();
+      let newFinal = '';
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const txt = e.results[i][0].transcript;
+        if (e.results[i].isFinal) newFinal += txt + ' ';
+        else interim = txt;
+      }
+      // Append only genuinely new final text; deduplicate by comparing to session buffer
+      if (newFinal) {
+        const cleaned = cleanTranscript(newFinal);
+        if (cleaned && !sessionFinalRef.current.endsWith(cleaned.trimEnd())) {
+          sessionFinalRef.current += cleaned + ' ';
+          setInput(prev => {
+            const joined = (prev + ' ' + cleaned).replace(/\s{2,}/g, ' ').trimStart();
+            // Capitalise first letter
+            return joined.charAt(0).toUpperCase() + joined.slice(1);
+          });
+        }
+      }
+      setVoiceInterim(interim ? cleanTranscript(interim) : '');
+    };
+
+    rec.onerror = (e) => {
+      clearTimeout(silenceTimerRef.current);
+      setVoiceInterim('');
+      if (e.error === 'not-allowed' || e.error === 'permission-denied') {
+        setVoiceError('Microphone permission denied. Allow microphone access in your browser settings.');
+        intentionalStop.current = true;
+      } else if (e.error === 'no-speech') {
+        // not an error — silence timer will handle stopping
+      } else if (e.error !== 'aborted') {
+        setVoiceError(`Voice error: ${e.error}. Try again.`);
+        intentionalStop.current = true;
+      }
+      setRecording(false);
+    };
+
+    rec.onend = () => {
+      clearTimeout(silenceTimerRef.current);
+      setVoiceInterim('');
+      // Auto-restart unless user deliberately stopped or an error occurred
+      if (!intentionalStop.current) {
+        try { rec.start(); return; } catch { /* recognition already restarting */ }
+      }
+      setRecording(false);
+      intentionalStop.current = false;
+      sessionFinalRef.current = '';
+    };
+
+    return rec;
   };
-  const stopVoice = () => { recognitionRef.current?.stop(); setRecording(false); setVoiceInterim(''); };
+
+  // ── Voice input public API ────────────────────────────────────────────────────────
+  const startVoice = async () => {
+    if (!speechSupported) {
+      setVoiceError('Voice recognition is not supported. Please use Chrome or Edge.');
+      return;
+    }
+    // Abort any existing session before starting a new one
+    if (recognitionRef.current) { recognitionRef.current.abort(); recognitionRef.current = null; }
+    sessionFinalRef.current = '';
+    setVoiceError('');
+    setVoiceInterim('');
+    intentionalStop.current = false;
+
+    // Explicit mic permission check (Chrome shows a cleaner error via onError,
+    // but getUserMedia gives us a friendly gate before SpeechRecognition even starts)
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(t => t.stop()); // we only needed permission
+    } catch {
+      setVoiceError('Microphone permission denied. Allow microphone access and try again.');
+      return;
+    }
+
+    const rec = createRecognition(voiceLang);
+    recognitionRef.current = rec;
+    try { rec.start(); } catch (err) { setVoiceError(`Could not start: ${err.message}`); }
+  };
+
+  const stopVoice = () => {
+    intentionalStop.current = true;
+    clearTimeout(silenceTimerRef.current);
+    recognitionRef.current?.stop();
+    setRecording(false);
+    setVoiceInterim('');
+    sessionFinalRef.current = '';
+  };
 
   const allSharedFiles = messages
     .filter(m => m.role === 'user' && m.attachments?.length)
@@ -636,31 +742,54 @@ export default function AIChatbot() {
               <input ref={fileInputRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt" multiple style={{display:'none'}} onChange={handleFilePick}/>
               <ToolBtn title="Take a live photo" onClick={openCamera}>📷</ToolBtn>
               <ToolBtn title="View all shared files" onClick={()=>setViewerOpen(true)} badge={allSharedFiles.length}>📁</ToolBtn>
-              {/* Mic button — integrated voice input */}
+              {/* Mic button — advanced voice input */}
               <div style={{position:'relative',display:'inline-flex'}}>
                 <button
-                  title={!speechSupported?'Speech not supported in this browser':recording?'Stop recording':'Voice input — speak your symptoms'}
+                  title={!speechSupported?'Use Chrome or Edge for voice input':recording?'Stop recording (or wait 3 s of silence)':'Voice input — speak your symptoms'}
                   onClick={recording?stopVoice:startVoice}
-                  disabled={!speechSupported}
                   style={{
-                    width:34,height:34,borderRadius:10,border:'1.5px solid',borderColor:recording?'#ef4444':'#e2e8f0',
-                    background:recording?'#fef2f2':'#f8fafc',cursor:speechSupported?'pointer':'not-allowed',
-                    display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,
-                    color:recording?'#ef4444':'#4f46e5',flexShrink:0,
-                    animation:recording?'micPulse 1.2s infinite':'none',
+                    width:34,height:34,borderRadius:10,border:'1.5px solid',
+                    borderColor:recording?'#ef4444':voiceError?'#f97316':'#e2e8f0',
+                    background:recording?'#fef2f2':voiceError?'#fff7ed':'#f8fafc',
+                    cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',
+                    fontSize:16,color:recording?'#ef4444':voiceError?'#f97316':'#4f46e5',
+                    flexShrink:0,animation:recording?'micPulse 1.2s infinite':'none',
                     transition:'background 0.15s,border-color 0.15s',
-                    opacity:speechSupported?1:0.4,
                   }}
-                  onMouseEnter={e=>{if(speechSupported&&!recording){e.currentTarget.style.background='#ede9fe';e.currentTarget.style.borderColor='#4f46e5';}}}
-                  onMouseLeave={e=>{if(!recording){e.currentTarget.style.background='#f8fafc';e.currentTarget.style.borderColor='#e2e8f0';}}}
+                  onMouseEnter={e=>{if(!recording&&!voiceError){e.currentTarget.style.background='#ede9fe';e.currentTarget.style.borderColor='#4f46e5';}}}
+                  onMouseLeave={e=>{if(!recording&&!voiceError){e.currentTarget.style.background='#f8fafc';e.currentTarget.style.borderColor='#e2e8f0';}}}
                 >{recording?'⏹':'🎙️'}</button>
                 {recording&&<span style={{position:'absolute',top:-4,right:-4,width:10,height:10,borderRadius:'50%',background:'#ef4444',border:'1.5px solid #fff'}}/>}
               </div>
+              {/* Language selector */}
+              <select
+                value={voiceLang}
+                onChange={e=>{setVoiceLang(e.target.value);if(recording){stopVoice();}}} 
+                style={{height:28,borderRadius:8,border:'1.5px solid #e2e8f0',background:'#f8fafc',
+                  color:'#475569',fontSize:10.5,padding:'0 4px',cursor:'pointer',fontFamily:'inherit',
+                  outline:'none',flexShrink:0}}
+                title="Voice language"
+              >
+                <option value="en-IN">🇮🇳 EN-IN</option>
+                <option value="en-US">🇺🇸 EN-US</option>
+                <option value="te-IN">🇮🇳 Telugu</option>
+                <option value="hi-IN">🇮🇳 Hindi</option>
+              </select>
               <span style={{flex:1}}/>
               <span style={{fontSize:11,color:recording?'#ef4444':'#94a3b8',fontWeight:recording?700:400,transition:'color 0.2s'}}>
-                {recording?'🔴 Listening…':'images, PDFs &amp; docs'}
+                {recording?'🔴 Listening… (stops after 3 s silence)':'voice · files · docs'}
               </span>
             </div>
+            {/* Voice error / unsupported banner */}
+            {(voiceError||!speechSupported)&&(
+              <div style={{marginBottom:6,padding:'6px 12px',background:'#fff7ed',borderRadius:8,
+                border:'1px solid #fed7aa',fontSize:11.5,color:'#c2410c',
+                display:'flex',alignItems:'center',gap:8}}>
+                <span style={{flexShrink:0}}>⚠️</span>
+                <span style={{flex:1}}>{voiceError||'Voice recognition requires Chrome or Edge desktop.'}</span>
+                {voiceError&&<button onClick={()=>{setVoiceError('');startVoice();}} style={{background:'#f97316',border:'none',color:'#fff',borderRadius:6,padding:'3px 10px',cursor:'pointer',fontSize:11,fontWeight:700,flexShrink:0}}>Retry</button>}
+              </div>
+            )}
             {/* Interim voice text preview */}
             {voiceInterim&&(
               <div style={{marginBottom:6,padding:'5px 12px',background:'#fef2f2',borderRadius:8,border:'1px solid #fca5a5',fontSize:12,color:'#991b1b',fontStyle:'italic'}}>
