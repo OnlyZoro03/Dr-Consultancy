@@ -476,6 +476,50 @@ def ai_chat(current_user):
 
     return jsonify({'answer': answer}), 200
 
+# ─── Voice Triage ────────────────────────────────────────────────────────────
+@app.route('/api/voice-triage', methods=['POST'])
+@token_required
+def voice_triage(current_user):
+    """
+    Multilingual voice triage endpoint.
+
+    Request body (JSON):
+        transcript  str   – raw speech-to-text transcript (required)
+        lang        str   – BCP-47 language code, e.g. 'en-US' or 'te-IN' (optional)
+        vitals      dict  – { systolic_bp, diastolic_bp, heart_rate, spo2 } (optional)
+
+    Response (JSON):
+        clean_transcript, translated, extracted_data,
+        risk_level, department, confidence, ai_response,
+        emergency, trigger_reasons
+    """
+    from services.triage_engine import run_triage
+
+    data = request.get_json(silent=True) or {}
+    transcript = (data.get('transcript') or '').strip()
+    lang = (data.get('lang') or 'en').strip()
+    vitals = data.get('vitals') or {}
+
+    if not transcript:
+        return jsonify({'message': 'transcript is required'}), 400
+
+    # Sanitise vitals — coerce numeric strings
+    clean_vitals = {}
+    for key in ('systolic_bp', 'diastolic_bp', 'heart_rate', 'spo2'):
+        val = vitals.get(key)
+        if val is not None:
+            try:
+                clean_vitals[key] = float(val)
+            except (TypeError, ValueError):
+                pass
+
+    try:
+        result = run_triage(transcript, clean_vitals, lang)
+        return jsonify(result), 200
+    except Exception as e:
+        app.logger.error(f'[voice-triage] Error: {e}')
+        return jsonify({'message': f'Triage processing error: {str(e)}'}), 500
+
 # ─── Doctor Chat: get patient list ───────────────────────────────────────────
 @app.route('/api/chat/patients', methods=['GET'])
 @token_required
