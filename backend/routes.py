@@ -467,7 +467,14 @@ def ai_chat(current_user):
             "Please try again in a moment, or feel free to ask your doctor directly."
         )
 
-    return jsonify({'answer': answer.strip()}), 200
+    # Strip markdown code fences Gemini sometimes adds despite instructions
+    import re as _re
+    answer = answer.strip()
+    answer = _re.sub(r'^```[a-zA-Z]*\s*', '', answer)
+    answer = _re.sub(r'\s*```$', '', answer)
+    answer = answer.strip()
+
+    return jsonify({'answer': answer}), 200
 
 # ─── Doctor Chat: get patient list ───────────────────────────────────────────
 @app.route('/api/chat/patients', methods=['GET'])
