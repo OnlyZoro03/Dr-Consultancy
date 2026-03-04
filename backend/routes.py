@@ -415,12 +415,13 @@ def serve_upload(filename):
 @token_required
 def ai_chat(current_user):
     """General-purpose Gemini AI health chatbot for the website."""
-    from report_analyzer import _call_gemini
+    from report_analyzer import _call_gemini, _call_gemini_multimodal
     data = request.get_json()
     message = (data.get('message') or '').strip()
     history = data.get('history', [])  # list of {role, text} for multi-turn context
+    images = data.get('images', [])   # list of {data: base64str, mimeType: str}
 
-    if not message:
+    if not message and not images:
         return jsonify({'message': 'Message is required'}), 400
 
     # Build conversation context from history (last 6 turns to keep prompt short)
@@ -429,6 +430,28 @@ def ai_chat(current_user):
         role = 'Patient' if turn.get('role') == 'user' else 'Dr. AI'
         context_lines.append(f"{role}: {turn.get('text', '')}")
     context = '\n'.join(context_lines)
+
+    # Build the patient input section — richer instruction when images are attached
+    if images:
+        image_count = len(images)
+        image_instruction = (
+            f"The patient has shared {image_count} medical image(s) — this could be a lab report, "
+            "prescription, scan result, X-ray, blood test, or any medical document. \n"
+            "Carefully read and analyze every visible value, text, result, and finding in the image(s).\n"
+            "Extract:\n"
+            "- All test names and their values with units\n"
+            "- Which values are normal, elevated, low, or critical\n"
+            "- Any diagnoses, conditions, or doctor notes visible\n"
+            "- Medications or prescriptions if present\n"
+            "- Any abnormal or concerning findings\n\n"
+        )
+        # Append the patient's own question if it's a real question (not auto-generated)
+        auto_msgs = {'please analyze this medical image/report and explain all findings in detail.', 'i shared 1 file(s).'}
+        if message and message.lower().strip() not in auto_msgs:
+            image_instruction += f"The patient also asks: {message}\n\n"
+        patient_section = image_instruction
+    else:
+        patient_section = f"Patient question: {message}\n\n"
 
     prompt = (
         "You are Dr. AI, a knowledgeable medical assistant on the Dr. Consultancy platform.\n"
@@ -449,18 +472,22 @@ def ai_chat(current_user):
         "- risk.level: MUST be exactly one of: low, medium, high, critical\n"
         "- risk.label: matching human label e.g. 'Low Risk', 'Moderate Risk', 'High Risk', 'Critical — See a Doctor'\n"
         "- summary: 1 sentence, warm and clear\n"
-        "- bullets: 3-5 key facts or explanations about the topic\n"
+        "- bullets: 3-5 key facts or explanations about the topic. For image reports, list each important test result as a bullet.\n"
         "- factors: 2-4 contributing causes or risk factors. Use [] if none apply.\n"
-        "- vitals: ONLY include when specific numbers/measurements are discussed. "
-        "  status must be exactly one of: normal, low, elevated, high, critical. Use [] if no vitals mentioned.\n"
-        "- advice: 2-4 actionable steps the patient should take\n"
+        "- vitals: Extract ANY measurements visible in the image — blood pressure, glucose, hemoglobin, cholesterol, etc. "
+        "  status must be exactly one of: normal, low, elevated, high, critical. Use [] if no measurements found.\n"
+        "- advice: 2-4 actionable steps the patient should take based on these findings\n"
         "- disclaimer: always include this field\n"
         "- Tone: warm, supportive, non-alarming, easy to understand\n\n"
         + (f"Previous conversation:\n{context}\n\n" if context else "")
-        + f"Patient question: {message}\n\nDr. AI JSON response:"
+        + patient_section
+        + "Dr. AI JSON response:"
     )
 
-    answer = _call_gemini(prompt, temperature=0.5)
+    if images:
+        answer = _call_gemini_multimodal(prompt, images, temperature=0.4)
+    else:
+        answer = _call_gemini(prompt, temperature=0.5)
     if not answer:
         answer = (
             "I'm sorry, I'm having a little trouble connecting right now. "

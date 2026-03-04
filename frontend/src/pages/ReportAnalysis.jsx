@@ -6,7 +6,7 @@ import {
     FaCheckCircle, FaChartBar, FaStethoscope, FaInfoCircle, FaArrowLeft,
     FaCamera, FaTimes, FaTrash, FaUserMd, FaShieldAlt, FaEye,
     FaAppleAlt, FaRunning, FaTint, FaBed, FaHeartbeat,
-    FaRobot, FaPaperPlane, FaLeaf, FaBrain, FaExclamationTriangle,
+    FaLeaf, FaBrain, FaExclamationTriangle,
     FaThumbsUp, FaFlask, FaArrowRight
 } from 'react-icons/fa';
 import { Link } from 'react-router-dom';
@@ -200,12 +200,6 @@ const ReportAnalysis = () => {
     const [videoStream, setVideoStream] = useState(null);
     const videoRef = useRef(null);
 
-    // Chat state
-    const [chatMessages, setChatMessages] = useState([
-        { role: 'assistant', text: "Hi! I'm your AI Clinical Assistant. Once you select a report, you can ask me anything about your lab results — like \"Why is my WBC high?\" or \"Is my glucose level safe?\"" }
-    ]);
-    const [chatInput, setChatInput] = useState('');
-    const [chatLoading, setChatLoading] = useState(false);
     const [previewFile, setPreviewFile] = useState(null); // { url, name, isPdf }
 
     const openPreview = (file) => {
@@ -216,8 +210,6 @@ const ReportAnalysis = () => {
         if (previewFile) URL.revokeObjectURL(previewFile.url);
         setPreviewFile(null);
     };
-    const chatEndRef = useRef(null);
-
     // Active section tab for analysis view
     const [activeTab, setActiveTab] = useState('overview');
 
@@ -227,8 +219,6 @@ const ReportAnalysis = () => {
             videoRef.current.srcObject = videoStream;
         }
     }, [showCamera, videoStream]);
-    useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
-
     const fetchReports = async () => {
         try {
             const res = await api.get('/reports');
@@ -301,37 +291,10 @@ const ReportAnalysis = () => {
             }
             setReports(prev => [...newReports, ...prev]);
             setSelectedReport(newReports[0]);
-            setChatMessages([{ role: 'assistant', text: `Your report has been analyzed! I can see ${newReports[0].extracted_data?.length || 0} parameters. Ask me anything about your results.` }]);
             clearAll();
         } catch (err) {
             setError(err.response?.data?.message || 'Failed to analyze report.');
         } finally { setLoading(false); }
-    };
-
-    const sendChatMessage = async () => {
-        if (!chatInput.trim() || !selectedReport) return;
-        const question = chatInput.trim();
-        setChatMessages(prev => [...prev, { role: 'user', text: question }]);
-        setChatInput('');
-        setChatLoading(true);
-        try {
-            const res = await api.post('/report-chat', { question, report_id: selectedReport.id });
-            setChatMessages(prev => [...prev, { role: 'assistant', text: res.data.answer }]);
-        } catch (err) {
-            const status = err?.response?.status;
-            const msg = err?.response?.data?.message;
-            let errorText = 'Something went wrong. Please try again in a moment.';
-            if (status === 401 || status === 403) {
-                errorText = 'Session expired. Please refresh the page and log in again.';
-            } else if (status === 404) {
-                errorText = 'Report not found. Please re-select your report and try again.';
-            } else if (status === 500) {
-                errorText = `Server error: ${msg || 'Unknown error'}. Please try again.`;
-            } else if (!err?.response) {
-                errorText = 'Cannot reach the server. Please make sure the backend is running on port 5000.';
-            }
-            setChatMessages(prev => [...prev, { role: 'assistant', text: errorText }]);
-        } finally { setChatLoading(false); }
     };
 
     // ── Destructure selected report data ────────────────────────────────────
@@ -361,14 +324,6 @@ const ReportAnalysis = () => {
         { id: 'labs',      label: 'Lab Findings',       icon: <FaFlask /> },
         { id: 'interpret', label: "Doctor's Notes",     icon: <FaUserMd /> },
         { id: 'wellness',  label: 'Wellness Plan',      icon: <FaLeaf /> },
-        { id: 'chat',      label: 'AI Assistant',       icon: <FaRobot /> },
-    ];
-
-    const QUICK_QUESTIONS = [
-        "Is my report normal?",
-        "What should I be worried about?",
-        "What diet should I follow?",
-        "Explain my risk level",
     ];
 
     return (
@@ -776,86 +731,6 @@ const ReportAnalysis = () => {
                                 )}
 
                                 {/* ════════════ TAB: AI CHATBOT ════════════ */}
-                                {activeTab === 'chat' && (
-                                    <div className="card" style={{ borderRadius: '20px', overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '600px' }}>
-                                        {/* Chat header */}
-                                        <div style={{ background: 'linear-gradient(90deg,#2563eb,#6366f1)', padding: '1rem 1.5rem', flexShrink: 0 }}>
-                                            <div style={{ color: 'white', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.98rem' }}>
-                                                <FaRobot /> AI Clinical Assistant
-                                            </div>
-                                            <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.76rem', marginTop: '0.15rem' }}>
-                                                Ask me anything about your lab results
-                                            </div>
-                                        </div>
-
-                                        {/* Quick questions */}
-                                        <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #f1f5f9', flexShrink: 0, display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                                            {QUICK_QUESTIONS.map(q => (
-                                                <button key={q} onClick={() => { setChatInput(q); }} style={{
-                                                    padding: '0.25rem 0.75rem', borderRadius: '20px', border: '1px solid #e2e8f0',
-                                                    background: 'white', fontSize: '0.72rem', cursor: 'pointer', color: '#475569',
-                                                    transition: 'all 0.15s'
-                                                }} onMouseEnter={e => e.target.style.background = '#eff6ff'}
-                                                    onMouseLeave={e => e.target.style.background = 'white'}>
-                                                    {q}
-                                                </button>
-                                            ))}
-                                        </div>
-
-                                        {/* Messages */}
-                                        <div style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
-                                            {chatMessages.map((msg, i) => (
-                                                <div key={i} style={{
-                                                    display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                                                    marginBottom: '0.85rem'
-                                                }}>
-                                                    {msg.role === 'assistant' && (
-                                                        <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: 'linear-gradient(135deg,#2563eb,#6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '0.5rem', flexShrink: 0, marginTop: '0.15rem' }}>
-                                                            <FaRobot style={{ color: 'white', fontSize: '0.7rem' }} />
-                                                        </div>
-                                                    )}
-                                                    <div style={{
-                                                        maxWidth: '75%', padding: '0.7rem 1rem', borderRadius: msg.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
-                                                        background: msg.role === 'user' ? 'linear-gradient(90deg,#2563eb,#1d4ed8)' : '#f8fafc',
-                                                        color: msg.role === 'user' ? 'white' : '#334155',
-                                                        fontSize: '0.83rem', lineHeight: '1.65',
-                                                        border: msg.role === 'assistant' ? '1px solid #e2e8f0' : 'none',
-                                                        whiteSpace: 'pre-line'
-                                                    }}>
-                                                        {msg.text}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                            {chatLoading && (
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem' }}>
-                                                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#2563eb', animation: 'pulse 1s infinite' }} />
-                                                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#2563eb', animation: 'pulse 1s .2s infinite' }} />
-                                                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#2563eb', animation: 'pulse 1s .4s infinite' }} />
-                                                </div>
-                                            )}
-                                            <div ref={chatEndRef} />
-                                        </div>
-
-                                        {/* Input */}
-                                        <div style={{ padding: '0.85rem 1rem', borderTop: '1px solid #e2e8f0', display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
-                                            <input
-                                                value={chatInput}
-                                                onChange={e => setChatInput(e.target.value)}
-                                                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendChatMessage()}
-                                                placeholder="Ask about your report… (e.g. 'Why is my WBC high?')"
-                                                style={{
-                                                    flex: 1, padding: '0.65rem 1rem', borderRadius: '12px',
-                                                    border: '1px solid #e2e8f0', fontSize: '0.83rem', outline: 'none',
-                                                    background: '#f8fafc', color: '#1e293b'
-                                                }}
-                                            />
-                                            <button onClick={sendChatMessage} disabled={!chatInput.trim() || chatLoading} className="btn-primary" style={{ padding: '0.65rem 1rem', borderRadius: '12px', fontSize: '0.85rem' }}>
-                                                <FaPaperPlane />
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-
                                 {/* ─── Medical Disclaimer ──────────────────────── */}
                                 <div style={{
                                     padding: '1rem 1.25rem', background: '#f8fafc', borderRadius: '14px',

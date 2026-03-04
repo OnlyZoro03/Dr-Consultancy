@@ -162,7 +162,6 @@ const PatientDashboard = () => {
         { id: 'analyze-report', label: 'Analyze Report', icon: <FaFileMedical /> },
         { id: 'new-appointment', label: 'Apply Appointment', icon: <FaNotesMedical /> },
         { id: 'doctor-chat', label: 'Doctor Chat', icon: <FaCommentMedical /> },
-        { id: 'ai-chat', label: 'AI Assistance', icon: <FaRobot />, disabled: true },
         { id: 'profile', label: 'My Profile', icon: <FaUserCircle /> },
     ];
 

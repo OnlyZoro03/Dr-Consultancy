@@ -26,6 +26,77 @@ def _get_gemini_key():
     return os.environ.get('GEMINI_API_KEY', '')
 
 
+def _call_gemini_multimodal(prompt, images, temperature=0.4):
+    """Call Gemini with text + inline image parts (multimodal) using the new google.genai SDK."""
+    import base64
+    if not GEMINI_AVAILABLE:
+        return None
+
+    # Vision-capable models first
+    _MODELS = [
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-2.0-flash',
+        'gemini-2.0-flash-lite',
+    ]
+
+    key = _get_gemini_key()
+    if not key:
+        print('[Gemini] No API key found.')
+        return None
+
+    client = _genai_client_lib.Client(api_key=key)
+    config = _genai_types.GenerateContentConfig(
+        temperature=temperature,
+        max_output_tokens=8192,
+    )
+
+    # Build parts: images first, then text prompt
+    parts = []
+    for img in images:
+        try:
+            raw_bytes = base64.b64decode(img['data'])
+            parts.append(_genai_types.Part.from_bytes(
+                data=raw_bytes,
+                mime_type=img.get('mimeType', 'image/jpeg'),
+            ))
+        except Exception as e:
+            print(f'[Gemini] Image decode error: {e}')
+
+    parts.append(_genai_types.Part.from_text(text=prompt))
+
+    if len(parts) <= 1:  # only text part, no images decoded — fall back
+        return _call_gemini(prompt, temperature)
+
+    for model_name in _MODELS:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=parts,
+                config=config,
+            )
+            text = response.text if response and response.text else None
+            if text:
+                return text
+        except Exception as e:
+            err = str(e)
+            if '403' in err or 'leaked' in err.lower():
+                print('[Gemini] API key blocked.')
+                return None
+            if '404' in err or 'not found' in err.lower():
+                print(f'[Gemini] {model_name} not available for multimodal, trying next...')
+                continue
+            if '429' in err or 'quota' in err.lower() or 'exhausted' in err.lower():
+                print(f'[Gemini] {model_name} quota exceeded, trying next...')
+                continue
+            print(f'[Gemini] {model_name} multimodal error: {e}')
+            continue
+
+    # All multimodal models failed — fall back to text-only
+    print('[Gemini] Multimodal models exhausted, falling back to text-only.')
+    return _call_gemini(prompt, temperature)
+
+
 def _call_gemini(prompt, temperature=0.4):
     """Call Gemini with multi-model fallback using the new google.genai SDK."""
     if not GEMINI_AVAILABLE:
@@ -47,7 +118,7 @@ def _call_gemini(prompt, temperature=0.4):
     client = _genai_client_lib.Client(api_key=key)
     config = _genai_types.GenerateContentConfig(
         temperature=temperature,
-        max_output_tokens=1024,
+        max_output_tokens=8192,
     )
 
     for model_name in _MODELS:
@@ -844,7 +915,8 @@ Style rules:
 - No bullet-point lists — write in flowing, natural paragraphs.
 - Avoid all medical abbreviations unless you immediately explain them.
 - Use phrases like "the good news is...", "something worth keeping an eye on...", "nothing to panic about, but..."
-- Maximum 400 words. Be warm, not wordy.
+- Be thorough — fully answer every point before moving on. Don't cut off mid-thought.
+- Aim for 3–5 complete paragraphs. Never stop mid-sentence.
 """
 
 
@@ -895,10 +967,12 @@ def answer_report_question(question, extracted_data, ai_explanation):
         "- Mention their actual numbers naturally (e.g. 'your hemoglobin came in at 11.2, which is a little low').\n"
         "- Explain what it means for their day-to-day life in plain English.\n"
         "- If something is off, reassure them first, then explain the likely everyday reason.\n"
-        "- Give 2–3 practical, specific things they can do (food, lifestyle, when to see a doctor).\n"
+        "- Give 3–4 practical, specific things they can do (food, lifestyle, when to see a doctor).\n"
         "- Be clear about urgency — don't alarm them unnecessarily, but don't downplay serious issues.\n"
         "- Sound like a person, not a medical report. Use 'you', 'your', 'I'd suggest'.\n"
-        "- No bullet lists — write in natural, flowing sentences. 2–3 paragraphs max."
+        "- Write in natural, flowing sentences — no bullet lists.\n"
+        "- IMPORTANT: Write complete, full paragraphs. Never stop mid-sentence. Finish every thought fully.\n"
+        "- Aim for 3–5 solid paragraphs that completely answer the question."
     )
     gemini_answer = _call_gemini(prompt, temperature=0.5)
     if gemini_answer:
