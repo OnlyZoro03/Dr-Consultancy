@@ -13,8 +13,8 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# Enable CORS for HTTP routes and allow socket connections from the Vite dev server
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+# Enable CORS globally for all routes — required for the Vite dev server (port 5173)
+CORS(app, supports_credentials=True)
 
 # Initialize Flask-SocketIO with CORS so the React dev server can connect
 # async_mode='threading' keeps things compatible with the existing Werkzeug server
@@ -34,5 +34,6 @@ register_socket_events(socketio)
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    # Use socketio.run() instead of app.run() to enable WebSocket transport
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    # Port 5001 — avoids macOS AirPlay Receiver which occupies port 5000 on macOS Monterey+
+    # use_reloader=False prevents double Firebase-admin init caused by Werkzeug's child-process reloader
+    socketio.run(app, debug=True, host='0.0.0.0', port=5001, use_reloader=False)
