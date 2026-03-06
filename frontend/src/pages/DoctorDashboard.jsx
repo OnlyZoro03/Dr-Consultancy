@@ -89,6 +89,45 @@ const DoctorDashboard = () => {
             // Also refresh the appointments list so the main table stays in sync
             fetchAppointments();
 
+            // ── Live analytics update ─────────────────────────────────────
+            // Update dashboardStats in-place so charts refresh without a reload
+            const dept = data.department || data.recommended_department;
+            const risk = data.risk_level;
+            setDashboardStats(prev => {
+                if (!prev) return prev; // not yet loaded — skip
+
+                // Department load: increment existing bar, or add a new one
+                const updatedDeptLoad = prev.department_load
+                    ? prev.department_load.map(d =>
+                        d.department === dept ? { ...d, count: d.count + 1 } : d
+                      )
+                    : [];
+                if (dept && !updatedDeptLoad.find(d => d.department === dept)) {
+                    updatedDeptLoad.push({ department: dept, count: 1 });
+                }
+
+                // Risk distribution: increment matching slice, or add a new slice
+                const updatedRiskDist = prev.risk_distribution
+                    ? prev.risk_distribution.map(r =>
+                        r.risk === risk ? { ...r, value: r.value + 1 } : r
+                      )
+                    : [];
+                if (risk && !updatedRiskDist.find(r => r.risk === risk)) {
+                    updatedRiskDist.push({ risk, value: 1 });
+                }
+
+                return {
+                    ...prev,
+                    total_patients_today: (prev.total_patients_today || 0) + 1,
+                    high_risk_count:
+                        risk === 'High'
+                            ? (prev.high_risk_count || 0) + 1
+                            : (prev.high_risk_count || 0),
+                    department_load:   updatedDeptLoad,
+                    risk_distribution: updatedRiskDist,
+                };
+            });
+
             // Show floating alert only for High Risk patients
             if (data.risk_level === 'High') {
                 playAlertBeep();
@@ -121,7 +160,8 @@ const DoctorDashboard = () => {
     const [selectedAppt, setSelectedAppt] = useState(null);
     const [manualDate, setManualDate] = useState('');
 
-    useEffect(() => { fetchAppointments(); fetchTriageQueue(); }, []);
+    // Pre-fetch everything on mount so real-time socket updates have a base to mutate
+    useEffect(() => { fetchAppointments(); fetchTriageQueue(); fetchDashboardStats(); }, []);
 
     const fetchTriageQueue = async () => {
         setTriageLoading(true);
@@ -502,9 +542,33 @@ const DoctorDashboard = () => {
                     {/* ── Doctor Dashboard Analytics Tab ──────────────────── */}
                     {activeTab === 'analytics' && (
                         <div>
-                            <div className="page-header">
-                                <h1 className="page-title">Doctor Dashboard</h1>
-                                <p className="page-subtitle">Real-time patient triage statistics and hospital workload</p>
+                            {/* ── Header row with Live Monitoring badge ── */}
+                            <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <h1 className="page-title">Doctor Dashboard</h1>
+                                    <p className="page-subtitle">Real-time patient triage statistics and hospital workload</p>
+                                </div>
+
+                                {/* Live / offline badge */}
+                                <div style={{ flexShrink: 0, paddingTop: 4 }}>
+                                    <span style={{
+                                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                                        fontSize: '0.76rem', fontWeight: 700,
+                                        padding: '5px 12px', borderRadius: 20,
+                                        background: socketConnected ? '#f0fdf4' : '#fffbeb',
+                                        color:      socketConnected ? '#16a34a' : '#92400e',
+                                        border:     `1.5px solid ${socketConnected ? '#bbf7d0' : '#fde68a'}`,
+                                        lineHeight: 1.3,
+                                    }}>
+                                        <span style={{
+                                            width: 7, height: 7, borderRadius: '50%',
+                                            background: socketConnected ? '#22c55e' : '#f59e0b',
+                                            animation: socketConnected ? 'socketPulse 2s ease-in-out infinite' : 'none',
+                                            display: 'inline-block', flexShrink: 0,
+                                        }}/>
+                                        {socketConnected ? 'Live Monitoring Active' : 'Live updates temporarily unavailable'}
+                                    </span>
+                                </div>
                             </div>
 
                             {dashboardLoading && (
