@@ -97,7 +97,7 @@ const Login = () => {
                     onClick={handleGoogleLogin}
                     disabled={loading}
                 >
-                    <FaGoogle className="google-icon" /> Sign in with Google
+                    <FaGoogle className="google-icon" /> Continue with Google
                 </button>
 
                 <p className="auth-link">

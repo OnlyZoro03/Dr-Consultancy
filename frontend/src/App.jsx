@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import PatientDashboard from './pages/PatientDashboard';
@@ -10,12 +10,18 @@ import ProtectedRoute from './components/ProtectedRoute';
 import { AuthProvider } from './context/AuthContext';
 import AIChatbot from './components/AIChatbot';
 
+function ConditionalAIChatbot() {
+  const location = useLocation();
+  if (location.pathname === '/complete-profile') return null;
+  return <AIChatbot />;
+}
+
 function App() {
   return (
     <AuthProvider>
       <Router>
         <div className="font-sans text-gray-900 antialiased">
-          <AIChatbot />
+          <ConditionalAIChatbot />
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />

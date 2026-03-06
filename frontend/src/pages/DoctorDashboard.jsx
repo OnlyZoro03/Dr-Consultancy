@@ -2,11 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 import ChatBox from '../components/ChatBox';
+import SummaryCard from '../components/SummaryCard';
+import DepartmentChart from '../components/DepartmentChart';
+import RiskPieChart from '../components/RiskPieChart';
+import PatientExplanationPanel from '../components/PatientExplanationPanel';
 import {
     FaUserMd, FaCheck, FaTimes, FaSortAmountDown,
     FaHeartbeat, FaClipboardList, FaExclamationTriangle,
     FaClock, FaCheckCircle, FaCommentMedical, FaEdit,
-    FaUser, FaPhone, FaCalendarAlt, FaVenusMars, FaRulerVertical, FaWeight
+    FaUser, FaPhone, FaCalendarAlt, FaVenusMars, FaRulerVertical, FaWeight,
+    FaChartBar, FaUsers, FaHospital, FaBrain
 } from 'react-icons/fa';
 
 const DoctorDashboard = () => {
@@ -48,11 +53,52 @@ const DoctorDashboard = () => {
 
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState('queue');
+
+    // ── AI Triage Queue ───────────────────────────────────────────────────────
+    const [triageQueue, setTriageQueue]   = useState([]);
+    const [triageLoading, setTriageLoading] = useState(false);
+    const [selectedPatient, setSelectedPatient] = useState(null);
+
+    // ── Doctor Dashboard analytics state ─────────────────────────────────────
+    const [dashboardStats, setDashboardStats] = useState(null);
+    const [dashboardLoading, setDashboardLoading] = useState(false);
+    const [dashboardError, setDashboardError] = useState('');
     const [showScheduleModal, setShowScheduleModal] = useState(false);
     const [selectedAppt, setSelectedAppt] = useState(null);
     const [manualDate, setManualDate] = useState('');
 
-    useEffect(() => { fetchAppointments(); }, []);
+    useEffect(() => { fetchAppointments(); fetchTriageQueue(); }, []);
+
+    const fetchTriageQueue = async () => {
+        setTriageLoading(true);
+        try {
+            const res = await api.get('/doctor/patient-queue');
+            setTriageQueue(res.data);
+        } catch (err) {
+            console.error('Triage queue error:', err);
+        } finally {
+            setTriageLoading(false);
+        }
+    };
+
+    // Fetch dashboard stats whenever the analytics tab is opened
+    useEffect(() => {
+        if (activeTab === 'analytics') fetchDashboardStats();
+    }, [activeTab]);
+
+    const fetchDashboardStats = async () => {
+        setDashboardLoading(true);
+        setDashboardError('');
+        try {
+            const res = await api.get('/doctor/stats');
+            setDashboardStats(res.data);
+        } catch (err) {
+            console.error('Dashboard stats error:', err);
+            setDashboardError('Failed to load dashboard data. Please try again.');
+        } finally {
+            setDashboardLoading(false);
+        }
+    };
 
     const fetchAppointments = async () => {
         setLoading(true);
@@ -173,6 +219,12 @@ const DoctorDashboard = () => {
                         <span className="icon"><FaClipboardList /></span> Patient Queue
                     </button>
                     <button
+                        className={`sidebar-item ${activeTab === 'analytics' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('analytics')}
+                    >
+                        <span className="icon"><FaChartBar /></span> Doctor Dashboard
+                    </button>
+                    <button
                         className={`sidebar-item ${activeTab === 'chat' ? 'active' : ''}`}
                         onClick={() => setActiveTab('chat')}
                     >
@@ -255,7 +307,10 @@ const DoctorDashboard = () => {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {appointments.map(appt => (
+                                            {appointments.map(appt => {
+                                                // Merge with richer triage data if available
+                                                const triage = triageQueue.find(t => t.id === appt.id);
+                                                return (
                                                 <tr key={appt.id} className={appt.risk_level === 'High' ? 'risk-high-row' : ''}>
                                                     <td>
                                                         <span className={getRiskBadge(appt.risk_level)}>{appt.risk_level}</span>
@@ -278,36 +333,135 @@ const DoctorDashboard = () => {
                                                         <span className={getStatusBadge(appt.status)}>{appt.status}</span>
                                                     </td>
                                                     <td>
-                                                        {appt.status === 'Pending' ? (
-                                                            <div className="action-btns">
-                                                                <button
-                                                                    className="btn-secondary"
-                                                                    onClick={() => handleAction(appt.id, 'Approved')}
-                                                                    title="Approve"
-                                                                    style={{ padding: '0.4rem 0.75rem' }}
-                                                                >
-                                                                    <FaCheck />
-                                                                </button>
-                                                                <button
-                                                                    className="btn-danger"
-                                                                    onClick={() => handleAction(appt.id, 'Rejected')}
-                                                                    title="Reject"
-                                                                    style={{ padding: '0.4rem 0.75rem' }}
-                                                                >
-                                                                    <FaTimes />
-                                                                </button>
-                                                            </div>
-                                                        ) : (
-                                                            <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-                                                                {appt.status === 'Approved' ? '✅ Done' : '❌ Rejected'}
-                                                            </span>
-                                                        )}
+                                                        <div className="action-btns" style={{ flexWrap: 'wrap', gap: '0.35rem' }}>
+                                                            {/* AI Explanation Button */}
+                                                            <button
+                                                                onClick={() => setSelectedPatient(triage || {
+                                                                    id: appt.id,
+                                                                    name: appt.patient_name || `Patient #${appt.patient_id}`,
+                                                                    age: appt.age,
+                                                                    gender: appt.gender,
+                                                                    symptoms: appt.symptoms,
+                                                                    department: appt.recommended_department,
+                                                                    risk_level: appt.risk_level,
+                                                                    pre_existing_conditions: appt.pre_existing_conditions,
+                                                                    vitals_raw: appt.vitals,
+                                                                    vitals_structured: {},
+                                                                    confidence: null,
+                                                                    ai_explanation: {},
+                                                                })}
+                                                                title="View AI Explanation"
+                                                                style={{
+                                                                    padding: '0.4rem 0.65rem',
+                                                                    background: 'linear-gradient(135deg,#4f46e5,#7c3aed)',
+                                                                    color: '#fff', border: 'none', borderRadius: 8,
+                                                                    cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600,
+                                                                    display: 'flex', alignItems: 'center', gap: 5,
+                                                                    whiteSpace: 'nowrap',
+                                                                }}
+                                                            >
+                                                                <FaBrain style={{ fontSize: '0.75rem' }} /> AI
+                                                            </button>
+
+                                                            {appt.status === 'Pending' ? (
+                                                                <>
+                                                                    <button
+                                                                        className="btn-secondary"
+                                                                        onClick={() => handleAction(appt.id, 'Approved')}
+                                                                        title="Approve"
+                                                                        style={{ padding: '0.4rem 0.75rem' }}
+                                                                    >
+                                                                        <FaCheck />
+                                                                    </button>
+                                                                    <button
+                                                                        className="btn-danger"
+                                                                        onClick={() => handleAction(appt.id, 'Rejected')}
+                                                                        title="Reject"
+                                                                        style={{ padding: '0.4rem 0.75rem' }}
+                                                                    >
+                                                                        <FaTimes />
+                                                                    </button>
+                                                                </>
+                                                            ) : (
+                                                                <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                                                                    {appt.status === 'Approved' ? '✅ Done' : '❌ Rejected'}
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                     </td>
                                                 </tr>
-                                            ))}
+                                                );
+                                            })}
                                         </tbody>
                                     </table>
                                 </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* ── Doctor Dashboard Analytics Tab ──────────────────── */}
+                    {activeTab === 'analytics' && (
+                        <div>
+                            <div className="page-header">
+                                <h1 className="page-title">Doctor Dashboard</h1>
+                                <p className="page-subtitle">Real-time patient triage statistics and hospital workload</p>
+                            </div>
+
+                            {dashboardLoading && (
+                                <div className="loading-spinner">
+                                    <div className="spinner"></div> Loading dashboard...
+                                </div>
+                            )}
+
+                            {dashboardError && !dashboardLoading && (
+                                <div className="alert alert-error" style={{ marginBottom: '1.5rem' }}>
+                                    {dashboardError}
+                                    <button
+                                        onClick={fetchDashboardStats}
+                                        style={{ marginLeft: '1rem', fontWeight: 600, textDecoration: 'underline', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
+                                    >
+                                        Retry
+                                    </button>
+                                </div>
+                            )}
+
+                            {dashboardStats && !dashboardLoading && (
+                                <>
+                                    {/* ── Row 1: Summary Cards ─────────────────── */}
+                                    <div className="dashboard-cards-grid">
+                                        <SummaryCard
+                                            title="Total Patients Today"
+                                            value={dashboardStats.total_patients_today}
+                                            icon={<FaUsers style={{ fontSize: '1.6rem' }} />}
+                                            color="bg-blue"
+                                            subtext="Across all departments"
+                                        />
+                                        <SummaryCard
+                                            title="High Risk Patients"
+                                            value={dashboardStats.high_risk_count}
+                                            icon={<FaExclamationTriangle style={{ fontSize: '1.6rem' }} />}
+                                            color="bg-red"
+                                            subtext="Require immediate attention"
+                                        />
+                                        <SummaryCard
+                                            title="Avg. Waiting Time"
+                                            value={`${dashboardStats.average_waiting_time} min`}
+                                            icon={<FaClock style={{ fontSize: '1.6rem' }} />}
+                                            color="bg-green"
+                                            subtext="Per patient today"
+                                        />
+                                    </div>
+
+                                    {/* ── Row 2: Department Bar Chart ──────────── */}
+                                    <div style={{ marginTop: '1.75rem' }}>
+                                        <DepartmentChart data={dashboardStats.department_load || []} />
+                                    </div>
+
+                                    {/* ── Row 3: Risk Pie Chart ────────────────── */}
+                                    <div style={{ marginTop: '1.75rem', maxWidth: 520 }}>
+                                        <RiskPieChart data={dashboardStats.risk_distribution || []} />
+                                    </div>
+                                </>
                             )}
                         </div>
                     )}
@@ -545,6 +699,14 @@ const DoctorDashboard = () => {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* ── AI Explanation Sliding Panel ─────────────────────────── */}
+            {selectedPatient && (
+                <PatientExplanationPanel
+                    patient={selectedPatient}
+                    onClose={() => setSelectedPatient(null)}
+                />
             )}
         </div>
     );

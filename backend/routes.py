@@ -309,6 +309,252 @@ def doctor_dashboard(current_user):
         'appointments': [a.to_dict() for a in sorted_appointments]
     })
 
+@app.route('/api/doctor/stats', methods=['GET'])
+@token_required
+def doctor_stats(current_user):
+    """
+    Returns aggregated statistics for the Doctor Dashboard:
+      - total_patients_today
+      - high_risk_count
+      - average_waiting_time  (estimated: 20 min base + 5 min per high-risk)
+      - department_load       (per recommended_department)
+      - risk_distribution     (Low / Medium / High counts)
+    """
+    if current_user.role != 'doctor':
+        return jsonify({'message': 'Unauthorized'}), 403
+
+    all_appts = Appointment.query.all()
+
+    # ── Total patients today ──────────────────────────────────────────────────
+    today = datetime.date.today()
+    today_appts = [
+        a for a in all_appts
+        if a.created_at and a.created_at.date() == today
+    ]
+    # Fall back to all appointments if none were created today (dev / mock data)
+    population = today_appts if today_appts else all_appts
+    total_today = len(population)
+
+    # ── Risk counts ───────────────────────────────────────────────────────────
+    high_count   = sum(1 for a in population if a.risk_level == 'High')
+    medium_count = sum(1 for a in population if a.risk_level == 'Medium')
+    low_count    = sum(1 for a in population if a.risk_level == 'Low')
+
+    # ── Estimated average waiting time ────────────────────────────────────────
+    avg_wait = round(20 + (high_count * 5 / max(total_today, 1)), 1)
+
+    # ── Department load ───────────────────────────────────────────────────────
+    dept_counts = {}
+    for a in population:
+        dept = a.recommended_department or 'General Medicine'
+        dept_counts[dept] = dept_counts.get(dept, 0) + 1
+
+    # If no real data, return illustrative mock data so charts always render
+    if not dept_counts:
+        dept_counts = {
+            'General Medicine': 15,
+            'Cardiology': 12,
+            'Neurology': 8,
+            'Emergency': 13,
+        }
+
+    department_load = [{'department': k, 'count': v} for k, v in dept_counts.items()]
+
+    # ── Risk distribution ─────────────────────────────────────────────────────
+    if total_today == 0:
+        risk_distribution = [
+            {'risk': 'Low',    'value': 24},
+            {'risk': 'Medium', 'value': 14},
+            {'risk': 'High',   'value': 10},
+        ]
+    else:
+        risk_distribution = [
+            {'risk': 'Low',    'value': low_count},
+            {'risk': 'Medium', 'value': medium_count},
+            {'risk': 'High',   'value': high_count},
+        ]
+
+    return jsonify({
+        'total_patients_today': total_today if total_today else 48,
+        'high_risk_count':      high_count  if total_today else 12,
+        'average_waiting_time': avg_wait    if total_today else 18,
+        'department_load':      department_load,
+        'risk_distribution':    risk_distribution,
+    })
+
+
+@app.route('/api/doctor/patient-queue', methods=['GET'])
+@token_required
+def doctor_patient_queue(current_user):
+    """
+    Return the full patient queue enriched with AI triage explanation.
+    Patients are sorted: High → Medium → Low risk.
+    """
+    if current_user.role != 'doctor':
+        return jsonify({'message': 'Unauthorized'}), 403
+
+    appointments = Appointment.query.all()
+
+    def _risk_order(level):
+        return {'High': 0, 'Medium': 1, 'Low': 2}.get(level, 3)
+
+    def _parse_vitals(vitals_str):
+        """Parse 'BP:120/80, HR:72, Temp:98.6' into a structured dict."""
+        structured = {}
+        if not vitals_str:
+            return structured
+        raw = vitals_str.upper()
+        # Blood pressure
+        import re as _re
+        bp_match = _re.search(r'BP[:\s]*(\d+/\d+)', raw)
+        if bp_match:
+            structured['bp'] = bp_match.group(1)
+        # Heart rate
+        hr_match = _re.search(r'HR[:\s]*(\d+)', raw)
+        if hr_match:
+            structured['heart_rate'] = int(hr_match.group(1))
+        # Temperature
+        temp_match = _re.search(r'TEMP(?:ERATURE)?[:\s]*(\d+\.?\d*)', raw)
+        if temp_match:
+            structured['temperature'] = float(temp_match.group(1))
+        # SpO2
+        spo2_match = _re.search(r'SPO2[:\s]*(\d+)', raw)
+        if spo2_match:
+            structured['spo2'] = int(spo2_match.group(1))
+        return structured
+
+    def _build_explanation(appt, reasons, confidence):
+        """Build an ai_explanation dict from appointment data."""
+        risk = appt.risk_level or 'Low'
+        dept = appt.recommended_department or 'General Medicine'
+        symptoms = (appt.symptoms or '').lower()
+        conditions = (appt.pre_existing_conditions or '').lower()
+
+        # Possible concern mapping
+        concern_map = {
+            'Cardiology':   'Possible cardiac condition requiring prompt evaluation',
+            'Pulmonology':  'Respiratory distress or pulmonary condition',
+            'Neurology':    'Neurological involvement — further assessment needed',
+            'Emergency':    'Acute emergency condition — immediate attention required',
+            'Orthopedics':  'Musculoskeletal injury or disorder',
+            'Gastroenterology': 'Gastrointestinal condition requiring investigation',
+        }
+        possible_concern = concern_map.get(dept, f'General medical condition routed to {dept}')
+
+        # Contributing factors (merge AI reasons with condition-based ones)
+        factors = list(reasons)[:4]  # cap at 4
+        if not factors:
+            if risk == 'High':
+                factors.append('Severe or acute symptom presentation')
+            elif risk == 'Medium':
+                factors.append('Moderate symptom severity')
+            else:
+                factors.append('Mild or non-urgent presentation')
+        if conditions and conditions != 'none' and 'condition' not in ' '.join(factors).lower():
+            factors.append(f'Pre-existing: {appt.pre_existing_conditions}')
+
+        # Immediate advice
+        advice_map = {
+            'High':   f'Immediate consultation with {dept} recommended. Do not delay — patient may require urgent intervention.',
+            'Medium': f'Schedule a {dept} appointment within 24–48 hours. Monitor vitals closely in the meantime.',
+            'Low':    f'Routine {dept} review recommended. Standard monitoring and follow-up as needed.',
+        }
+        advice = advice_map.get(risk, 'Please consult the appropriate department.')
+
+        return {
+            'possible_concern': possible_concern,
+            'factors': factors,
+            'advice': advice,
+        }
+
+    result = []
+    for appt in appointments:
+        classification = classify_risk({
+            'age': appt.age or 30,
+            'symptoms': appt.symptoms or '',
+            'vitals': appt.vitals or '',
+            'pre_existing_conditions': appt.pre_existing_conditions or '',
+        })
+        reasons = classification.get('reasons', [])
+        risk_score = classification.get('risk_score', 0)
+        # Normalize confidence: map risk_score to a 0-1 float
+        max_score = 8.0
+        confidence = round(min(risk_score / max_score, 1.0), 2) if risk_score else 0.45
+
+        vitals_structured = _parse_vitals(appt.vitals or '')
+        ai_explanation = _build_explanation(appt, reasons, confidence)
+
+        result.append({
+            'id':             appt.id,
+            'patient_id':     f'P{appt.patient_id}',
+            'name':           appt.patient_name or f'Patient #{appt.patient_id}',
+            'age':            appt.age,
+            'gender':         appt.gender,
+            'symptoms':       appt.symptoms,
+            'department':     appt.recommended_department or 'General Medicine',
+            'risk_level':     appt.risk_level or 'Low',
+            'confidence':     confidence,
+            'status':         appt.status,
+            'pre_existing_conditions': appt.pre_existing_conditions,
+            'vitals_raw':     appt.vitals,
+            'vitals_structured': vitals_structured,
+            'ai_explanation': ai_explanation,
+            'created_at':     appt.created_at.isoformat() if appt.created_at else None,
+        })
+
+    # Sort: High first, then Medium, then Low; stable sort preserves insertion order within same risk
+    result.sort(key=lambda x: _risk_order(x['risk_level']))
+
+    # If no real DB data, return illustrative mock records so the UI always renders
+    if not result:
+        result = [
+            {
+                'id': 1001, 'patient_id': 'P101', 'name': 'Ravi Kumar', 'age': 58, 'gender': 'Male',
+                'symptoms': 'Chest pain, shortness of breath, sweating',
+                'department': 'Cardiology', 'risk_level': 'High', 'confidence': 0.91,
+                'status': 'Pending', 'pre_existing_conditions': 'Hypertension, Diabetes',
+                'vitals_raw': 'BP:175/100, HR:115, Temp:98.7',
+                'vitals_structured': {'bp': '175/100', 'heart_rate': 115, 'temperature': 98.7},
+                'ai_explanation': {
+                    'possible_concern': 'Possible cardiac event — acute onset chest pain with hypertension',
+                    'factors': ['BP critically elevated (175/100)', 'Heart rate above normal (115 bpm)', 'High-risk symptom: chest pain', 'Age above 50 with diabetes'],
+                    'advice': 'Immediate cardiology consultation. ECG and troponin levels required urgently.',
+                },
+                'created_at': None,
+            },
+            {
+                'id': 1002, 'patient_id': 'P102', 'name': 'Priya Sharma', 'age': 34, 'gender': 'Female',
+                'symptoms': 'High fever, vomiting, abdominal pain for 2 days',
+                'department': 'Gastroenterology', 'risk_level': 'Medium', 'confidence': 0.67,
+                'status': 'Pending', 'pre_existing_conditions': 'None',
+                'vitals_raw': 'BP:118/76, HR:96, Temp:102.4',
+                'vitals_structured': {'bp': '118/76', 'heart_rate': 96, 'temperature': 102.4},
+                'ai_explanation': {
+                    'possible_concern': 'Acute gastroenteritis or possible appendicitis',
+                    'factors': ['High fever (102.4°F)', 'Medium-risk symptom: vomiting', 'Persistent abdominal pain for 2 days'],
+                    'advice': 'Schedule gastroenterology review within 24 hours. Rehydration and close monitoring recommended.',
+                },
+                'created_at': None,
+            },
+            {
+                'id': 1003, 'patient_id': 'P103', 'name': 'Anil Reddy', 'age': 45, 'gender': 'Male',
+                'symptoms': 'Mild headache, fatigue, mild cough',
+                'department': 'General Medicine', 'risk_level': 'Low', 'confidence': 0.42,
+                'status': 'Approved', 'pre_existing_conditions': 'Mild asthma',
+                'vitals_raw': 'BP:122/80, HR:74, Temp:98.2',
+                'vitals_structured': {'bp': '122/80', 'heart_rate': 74, 'temperature': 98.2},
+                'ai_explanation': {
+                    'possible_concern': 'Upper respiratory tract infection or tension headache',
+                    'factors': ['Non-acute symptom presentation', 'Pre-existing mild asthma', 'Normal vital signs'],
+                    'advice': 'Routine general medicine review. Rest, hydration, and OTC medication as needed.',
+                },
+                'created_at': None,
+            },
+        ]
+
+    return jsonify(result), 200
+
+
 @app.route('/api/doctor/appointment/<int:id>', methods=['PUT'])
 @token_required
 def manage_appointment(current_user, id):
