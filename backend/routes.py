@@ -587,6 +587,80 @@ def doctor_patient_queue(current_user):
     return jsonify(result), 200
 
 
+@app.route('/api/doctor/next-patient', methods=['GET'])
+@token_required
+def doctor_next_patient(current_user):
+    """
+    Return the single highest-priority patient the doctor should treat next.
+
+    Priority score formula:
+        risk_weight  →  High=3, Medium=2, Low=1
+        waiting_score = waiting_minutes / 5
+        priority_score = (risk_weight * 2) + waiting_score
+    """
+    if current_user.role != 'doctor':
+        return jsonify({'message': 'Unauthorized'}), 403
+
+    import datetime as _dt
+
+    RISK_WEIGHT = {'High': 3, 'Medium': 2, 'Low': 1}
+
+    appointments = Appointment.query.filter(
+        Appointment.status == 'Pending'
+    ).all()
+
+    now = _dt.datetime.utcnow()
+
+    scored = []
+    for appt in appointments:
+        risk = appt.risk_level or 'Low'
+        weight = RISK_WEIGHT.get(risk, 1)
+
+        # Waiting time in minutes since the appointment was created
+        if appt.created_at:
+            waiting_minutes = max(0, int((now - appt.created_at).total_seconds() / 60))
+        else:
+            # Fallback: no timestamp — treat as 10 min wait as placeholder
+            waiting_minutes = 10
+
+        waiting_score = waiting_minutes / 5.0
+        priority_score = round((weight * 2) + waiting_score, 1)
+
+        scored.append({
+            'id':             appt.id,
+            'patient_id':     f'P{appt.patient_id}',
+            'name':           appt.patient_name or f'Patient #{appt.patient_id}',
+            'age':            appt.age,
+            'gender':         appt.gender,
+            'symptoms':       appt.symptoms,
+            'department':     appt.recommended_department or 'General Medicine',
+            'risk_level':     risk,
+            'status':         appt.status,
+            'pre_existing_conditions': appt.pre_existing_conditions,
+            'vitals_raw':     appt.vitals,
+            'vitals_structured': {},
+            'ai_explanation': {},
+            'confidence':     None,
+            'waiting_time':   waiting_minutes,
+            'priority_score': priority_score,
+            'created_at':     appt.created_at.isoformat() if appt.created_at else None,
+        })
+
+    if not scored:
+        return jsonify({'recommendation': None, 'multiple_high_risk': False}), 200
+
+    # Sort by priority_score descending; secondary sort by risk weight descending
+    scored.sort(key=lambda x: (x['priority_score'], RISK_WEIGHT.get(x['risk_level'], 1)), reverse=True)
+
+    high_risk_count = sum(1 for p in scored if p['risk_level'] == 'High')
+    multiple_high_risk = high_risk_count > 1
+
+    return jsonify({
+        'recommendation':    scored[0],
+        'multiple_high_risk': multiple_high_risk,
+    }), 200
+
+
 @app.route('/api/doctor/appointment/<int:id>', methods=['PUT'])
 @token_required
 def manage_appointment(current_user, id):

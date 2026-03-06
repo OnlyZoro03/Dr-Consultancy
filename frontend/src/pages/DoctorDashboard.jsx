@@ -7,6 +7,7 @@ import DepartmentChart from '../components/DepartmentChart';
 import RiskPieChart from '../components/RiskPieChart';
 import PatientExplanationPanel from '../components/PatientExplanationPanel';
 import HighRiskAlert, { playAlertBeep } from '../components/HighRiskAlert';
+import NextPatientRecommendation from '../components/NextPatientRecommendation';
 import socket from '../services/socket';
 import {
     FaUserMd, FaCheck, FaTimes, FaSortAmountDown,
@@ -61,6 +62,24 @@ const DoctorDashboard = () => {
     const [triageLoading, setTriageLoading] = useState(false);
     const [selectedPatient, setSelectedPatient] = useState(null);
 
+    // ── Next-Patient Recommendation state ──────────────────────────────────
+    const [nextPatient, setNextPatient] = useState(null);
+    const [nextPatientLoading, setNextPatientLoading] = useState(false);
+    const [multipleHighRisk, setMultipleHighRisk] = useState(false);
+
+    const fetchNextPatient = async () => {
+        setNextPatientLoading(true);
+        try {
+            const res = await api.get('/doctor/next-patient');
+            setNextPatient(res.data.recommendation);
+            setMultipleHighRisk(res.data.multiple_high_risk || false);
+        } catch (err) {
+            console.error('Next-patient fetch error:', err);
+        } finally {
+            setNextPatientLoading(false);
+        }
+    };
+
     // ── High-Risk Alert state ─────────────────────────────────────────
     const [highRiskAlerts, setHighRiskAlerts] = useState([]);
     const [socketConnected, setSocketConnected] = useState(false);
@@ -86,8 +105,9 @@ const DoctorDashboard = () => {
                 );
             });
 
-            // Also refresh the appointments list so the main table stays in sync
+            // Also refresh the appointments list + next-patient recommendation
             fetchAppointments();
+            fetchNextPatient();
 
             // ── Live analytics update ─────────────────────────────────────
             // Update dashboardStats in-place so charts refresh without a reload
@@ -161,7 +181,7 @@ const DoctorDashboard = () => {
     const [manualDate, setManualDate] = useState('');
 
     // Pre-fetch everything on mount so real-time socket updates have a base to mutate
-    useEffect(() => { fetchAppointments(); fetchTriageQueue(); fetchDashboardStats(); }, []);
+    useEffect(() => { fetchAppointments(); fetchTriageQueue(); fetchDashboardStats(); fetchNextPatient(); }, []);
 
     const fetchTriageQueue = async () => {
         setTriageLoading(true);
@@ -336,6 +356,18 @@ const DoctorDashboard = () => {
                 <main className={`main-content ${activeTab === 'chat' ? 'no-padding' : ''}`}>
                     {activeTab === 'queue' && (
                         <div>
+                            {/* ── AI Next-Patient Recommendation card ───────── */}
+                            <NextPatientRecommendation
+                                recommendation={nextPatient}
+                                loading={nextPatientLoading}
+                                multipleHighRisk={multipleHighRisk}
+                                onSelect={(patient) => {
+                                    // Merge with triage data if available so the panel is rich
+                                    const full = triageQueue.find(t => t.id === patient.id) || patient;
+                                    setSelectedPatient(full);
+                                }}
+                            />
+
                             <div className="page-header" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem' }}>
                                 <div style={{ flex: 1, minWidth: 0 }}>
                                     <h1 className="page-title">Patient Queue</h1>
