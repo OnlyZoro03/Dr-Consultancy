@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 import ChatBox from '../components/ChatBox';
@@ -6,12 +6,14 @@ import SummaryCard from '../components/SummaryCard';
 import DepartmentChart from '../components/DepartmentChart';
 import RiskPieChart from '../components/RiskPieChart';
 import PatientExplanationPanel from '../components/PatientExplanationPanel';
+import HighRiskAlert, { playAlertBeep } from '../components/HighRiskAlert';
+import socket from '../services/socket';
 import {
     FaUserMd, FaCheck, FaTimes, FaSortAmountDown,
     FaHeartbeat, FaClipboardList, FaExclamationTriangle,
     FaClock, FaCheckCircle, FaCommentMedical, FaEdit,
     FaUser, FaPhone, FaCalendarAlt, FaVenusMars, FaRulerVertical, FaWeight,
-    FaChartBar, FaUsers, FaHospital, FaBrain
+    FaChartBar, FaUsers, FaHospital, FaBrain, FaBell
 } from 'react-icons/fa';
 
 const DoctorDashboard = () => {
@@ -58,6 +60,58 @@ const DoctorDashboard = () => {
     const [triageQueue, setTriageQueue]   = useState([]);
     const [triageLoading, setTriageLoading] = useState(false);
     const [selectedPatient, setSelectedPatient] = useState(null);
+
+    // ── High-Risk Alert state ─────────────────────────────────────────
+    const [highRiskAlerts, setHighRiskAlerts] = useState([]);
+    const [socketConnected, setSocketConnected] = useState(false);
+    const alertCounterRef = useRef(0);
+
+    const dismissAlert = useCallback((alertId) => {
+        setHighRiskAlerts(prev => prev.filter(a => a._alertId !== alertId));
+    }, []);
+
+    // ── Socket lifecycle tied to doctor session ────────────────────────
+    useEffect(() => {
+        const riskOrder = { High: 0, Medium: 1, Low: 2 };
+
+        const onConnect = () => setSocketConnected(true);
+        const onDisconnect = () => setSocketConnected(false);
+
+        const onNewTriage = (data) => {
+            // Always prepend data to the triage queue, sorted by risk
+            setTriageQueue(prev => {
+                const merged = [data, ...prev.filter(p => p.id !== data.id)];
+                return merged.sort((a, b) =>
+                    (riskOrder[a.risk_level] ?? 3) - (riskOrder[b.risk_level] ?? 3)
+                );
+            });
+
+            // Also refresh the appointments list so the main table stays in sync
+            fetchAppointments();
+
+            // Show floating alert only for High Risk patients
+            if (data.risk_level === 'High') {
+                playAlertBeep();
+                setHighRiskAlerts(prev => [
+                    ...prev,
+                    { ...data, _alertId: ++alertCounterRef.current },
+                ]);
+            }
+        };
+
+        socket.on('connect',            onConnect);
+        socket.on('disconnect',         onDisconnect);
+        socket.on('new_patient_triage', onNewTriage);
+
+        // Sync initial connection state
+        setSocketConnected(socket.connected);
+
+        return () => {
+            socket.off('connect',            onConnect);
+            socket.off('disconnect',         onDisconnect);
+            socket.off('new_patient_triage', onNewTriage);
+        };
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── Doctor Dashboard analytics state ─────────────────────────────────────
     const [dashboardStats, setDashboardStats] = useState(null);
@@ -242,10 +296,56 @@ const DoctorDashboard = () => {
                 <main className={`main-content ${activeTab === 'chat' ? 'no-padding' : ''}`}>
                     {activeTab === 'queue' && (
                         <div>
-                            <div className="page-header">
-                                <h1 className="page-title">Patient Queue</h1>
-                                <p className="page-subtitle">AI-prioritized triage list — High risk patients appear first</p>
+                            <div className="page-header" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem' }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <h1 className="page-title">Patient Queue</h1>
+                                    <p className="page-subtitle">AI-prioritized triage list — High risk patients appear first</p>
+                                </div>
+
+                                {/* Live indicator + test button */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, paddingTop: 4 }}>
+                                    <span style={{
+                                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                                        fontSize: '0.76rem', fontWeight: 700,
+                                        padding: '5px 11px', borderRadius: 20,
+                                        background: socketConnected ? '#f0fdf4' : '#fef2f2',
+                                        color:      socketConnected ? '#16a34a' : '#dc2626',
+                                        border:     `1.5px solid ${socketConnected ? '#bbf7d0' : '#fecaca'}`,
+                                    }}>
+                                        <span style={{
+                                            width: 7, height: 7, borderRadius: '50%',
+                                            background: socketConnected ? '#22c55e' : '#ef4444',
+                                            animation: socketConnected ? 'socketPulse 2s ease-in-out infinite' : 'none',
+                                            display: 'inline-block', flexShrink: 0,
+                                        }}/>
+                                        {socketConnected ? 'Live' : 'Offline'}
+                                    </span>
+
+                                    <button
+                                        title="Simulate a high-risk patient alert (demo)"
+                                        onClick={async () => {
+                                            try { await api.post('/doctor/test-alert', {}); }
+                                            catch (e) { alert('Test alert failed: ' + (e?.response?.data?.message || e.message)); }
+                                        }}
+                                        style={{
+                                            display: 'flex', alignItems: 'center', gap: 6,
+                                            padding: '6px 13px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                                            background: 'linear-gradient(135deg,#dc2626,#b91c1c)',
+                                            color: '#fff', fontSize: '0.78rem', fontWeight: 700,
+                                            boxShadow: '0 2px 8px rgba(220,38,38,0.35)',
+                                        }}
+                                    >
+                                        <FaBell style={{ fontSize: '0.72rem' }}/> Test Alert
+                                    </button>
+                                </div>
                             </div>
+
+                            <style>{`
+                                @keyframes socketPulse {
+                                    0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.5); }
+                                    50%      { box-shadow: 0 0 0 4px rgba(34,197,94,0); }
+                                }
+                            `}</style>
 
                             {/* Stats */}
                             <div className="stats-grid">
@@ -708,7 +808,8 @@ const DoctorDashboard = () => {
                     onClose={() => setSelectedPatient(null)}
                 />
             )}
-        </div>
+            {/* ── High-Risk Real-Time Alert Stack ──────────────────────── */}
+            <HighRiskAlert alerts={highRiskAlerts} onDismiss={dismissAlert} />        </div>
     );
 };
 

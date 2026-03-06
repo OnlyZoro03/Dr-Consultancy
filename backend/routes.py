@@ -275,6 +275,38 @@ def create_appointment(current_user):
     )
     db.session.add(new_appt)
     db.session.commit()
+
+    # ── Real-time alert: broadcast triage result to all connected doctors ──
+    try:
+        from app import socketio
+        triage_payload = {
+            'id':           new_appt.id,
+            'patient_id':   f'P{new_appt.patient_id}',
+            'name':         new_appt.patient_name,
+            'age':          new_appt.age,
+            'gender':       new_appt.gender,
+            'symptoms':     new_appt.symptoms,
+            'department':   new_appt.recommended_department,
+            'risk_level':   new_appt.risk_level,
+            'confidence':   round(ai_result.get('risk_score', 1) / 8.0, 2),
+            'status':       new_appt.status,
+            'pre_existing_conditions': new_appt.pre_existing_conditions,
+            'vitals_raw':   new_appt.vitals,
+            'vitals_structured': {},
+            'ai_explanation': {
+                'possible_concern': f"{new_appt.recommended_department} condition detected",
+                'factors': ai_result.get('reasons', []),
+                'advice': (
+                    'Immediate consultation recommended — patient requires urgent attention.'
+                    if new_appt.risk_level == 'High'
+                    else f'Schedule {new_appt.recommended_department} review promptly.'
+                ),
+            },
+        }
+        socketio.emit('new_patient_triage', triage_payload)
+    except Exception as e:
+        app.logger.warning(f'[SocketIO] Could not emit triage event: {e}')
+
     return jsonify({
         'message': 'Appointment request submitted',
         'appointment_id': new_appt.id,
@@ -748,6 +780,42 @@ def ai_chat(current_user):
     answer = answer.strip()
 
     return jsonify({'answer': answer}), 200
+
+# ─── Test / Demo: emit a mock high-risk triage event ─────────────────────────
+@app.route('/api/doctor/test-alert', methods=['POST'])
+@token_required
+def test_high_risk_alert(current_user):
+    """Dev-only endpoint to emit a simulated high-risk triage event for UI testing."""
+    if current_user.role != 'doctor':
+        return jsonify({'message': 'Unauthorized'}), 403
+    try:
+        from app import socketio
+        import time
+        mock = {
+            'id':           9999,
+            'patient_id':   'P_TEST',
+            'name':         'Test Patient (Demo)',
+            'age':          62,
+            'gender':       'Male',
+            'symptoms':     'Severe chest pain, shortness of breath',
+            'department':   'Cardiology',
+            'risk_level':   'High',
+            'confidence':   0.94,
+            'status':       'Pending',
+            'pre_existing_conditions': 'Hypertension',
+            'vitals_raw':   'BP:180/110, HR:120, Temp:98.9',
+            'vitals_structured': {'bp': '180/110', 'heart_rate': 120, 'temperature': 98.9},
+            'ai_explanation': {
+                'possible_concern': 'Possible acute cardiac event',
+                'factors': ['BP critically elevated (180/110)', 'Heart rate 120 bpm', 'Classic cardiac symptoms', 'Age > 60'],
+                'advice': 'Immediate cardiology consultation. ECG and troponin required urgently.',
+            },
+        }
+        socketio.emit('new_patient_triage', mock)
+        return jsonify({'message': 'Test alert emitted', 'payload': mock}), 200
+    except Exception as e:
+        return jsonify({'message': f'Failed to emit: {str(e)}'}), 500
+
 
 # ─── Voice Triage ────────────────────────────────────────────────────────────
 @app.route('/api/voice-triage', methods=['POST'])
