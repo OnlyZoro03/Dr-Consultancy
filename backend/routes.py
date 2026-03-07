@@ -8,6 +8,10 @@ import datetime
 import os
 from ai_module import classify_risk
 from report_analyzer import analyze_medical_report, answer_report_question
+from services.ai_scheduler import (
+    compute_priority_score, compute_queue_position,
+    build_triage_payload, validate_appointment_data, is_duplicate_appointment,
+)
 import firebase_admin
 from firebase_admin import auth as firebase_auth, credentials
 
@@ -259,8 +263,25 @@ def report_chat(current_user):
 def create_appointment(current_user):
     if current_user.role != 'patient':
         return jsonify({'message': 'Only patients can book appointments'}), 403
-    data = request.get_json()
+
+    data = request.get_json(force=True) or {}
+
+    # ── Input validation ──────────────────────────────────────────────────────
+    errors = validate_appointment_data(data)
+    if errors:
+        return jsonify({'message': 'Validation failed', 'errors': errors}), 400
+
+    # ── Duplicate guard: same symptoms submitted in last 30 min ───────────────
+    if is_duplicate_appointment(Appointment, current_user.id, data['symptoms']):
+        return jsonify({
+            'message': 'A similar appointment request was submitted recently. '
+                       'Please wait before submitting again.'
+        }), 409
+
+    # ── AI triage ─────────────────────────────────────────────────────────────
     ai_result = classify_risk(data)
+
+    # ── Persist ───────────────────────────────────────────────────────────────
     new_appt = Appointment(
         patient_id=current_user.id,
         patient_name=data.get('patient_name', current_user.username),
@@ -271,46 +292,35 @@ def create_appointment(current_user):
         pre_existing_conditions=data.get('pre_existing_conditions', ''),
         risk_level=ai_result['risk_level'],
         recommended_department=ai_result['recommended_department'],
-        status='Pending'
+        status='Pending',
     )
     db.session.add(new_appt)
     db.session.commit()
 
-    # ── Real-time alert: broadcast triage result to all connected doctors ──
+    # ── Priority score + queue position ───────────────────────────────────────
+    priority_score = compute_priority_score(new_appt.risk_level, waiting_minutes=0)
+    pending_others = Appointment.query.filter(
+        Appointment.status == 'Pending',
+        Appointment.id != new_appt.id,
+    ).all()
+    queue_position = compute_queue_position(pending_others, priority_score, new_appt.risk_level)
+
+    # ── Build rich socket payload ─────────────────────────────────────────────
+    payload = build_triage_payload(new_appt, ai_result, priority_score, queue_position)
+
+    # ── Emit real-time event to all connected doctors ────────────────────────
     try:
         from app import socketio
-        triage_payload = {
-            'id':           new_appt.id,
-            'patient_id':   f'P{new_appt.patient_id}',
-            'name':         new_appt.patient_name,
-            'age':          new_appt.age,
-            'gender':       new_appt.gender,
-            'symptoms':     new_appt.symptoms,
-            'department':   new_appt.recommended_department,
-            'risk_level':   new_appt.risk_level,
-            'confidence':   round(ai_result.get('risk_score', 1) / 8.0, 2),
-            'status':       new_appt.status,
-            'pre_existing_conditions': new_appt.pre_existing_conditions,
-            'vitals_raw':   new_appt.vitals,
-            'vitals_structured': {},
-            'ai_explanation': {
-                'possible_concern': f"{new_appt.recommended_department} condition detected",
-                'factors': ai_result.get('reasons', []),
-                'advice': (
-                    'Immediate consultation recommended — patient requires urgent attention.'
-                    if new_appt.risk_level == 'High'
-                    else f'Schedule {new_appt.recommended_department} review promptly.'
-                ),
-            },
-        }
-        socketio.emit('new_patient_triage', triage_payload)
+        socketio.emit('new_patient_triage', payload)
     except Exception as e:
         app.logger.warning(f'[SocketIO] Could not emit triage event: {e}')
 
     return jsonify({
         'message': 'Appointment request submitted',
         'appointment_id': new_appt.id,
-        'ai_analysis': ai_result
+        'queue_position': queue_position,
+        'priority_score': priority_score,
+        'ai_analysis':    ai_result,
     }), 201
 
 @app.route('/api/patient/dashboard', methods=['GET'])
@@ -624,7 +634,7 @@ def doctor_next_patient(current_user):
             waiting_minutes = 10
 
         waiting_score = waiting_minutes / 5.0
-        priority_score = round((weight * 2) + waiting_score, 1)
+        priority_score = round((weight * 3) + waiting_score, 1)
 
         scored.append({
             'id':             appt.id,

@@ -58,6 +58,7 @@ const PatientDashboard = () => {
     const [loading, setLoading] = useState(false);
     const [fetchLoading, setFetchLoading] = useState(true);
     const [activeTab, setActiveTab] = useState('dashboard');
+    const [submitError, setSubmitError] = useState('');
     const [reports, setReports] = useState([]);
     const [aiPrediction, setAiPrediction] = useState(null);
 
@@ -112,6 +113,7 @@ const PatientDashboard = () => {
         e.preventDefault();
         setLoading(true);
         setAiPrediction(null);
+        setSubmitError('');
         try {
             const submissionData = {
                 patient_name: formData.patient_name,
@@ -123,7 +125,11 @@ const PatientDashboard = () => {
             };
 
             const res = await api.post('/appointments', submissionData);
-            setAiPrediction(res.data.ai_analysis);
+            setAiPrediction({
+                ...res.data.ai_analysis,
+                queue_position: res.data.queue_position,
+                priority_score: res.data.priority_score,
+            });
             await fetchDashboard();
             setFormData({
                 patient_name: user?.username || '',
@@ -133,7 +139,8 @@ const PatientDashboard = () => {
                 pre_existing_conditions: ''
             });
         } catch (err) {
-            alert('Failed to submit appointment. Please try again.');
+            const msg = err?.response?.data?.message || 'Failed to submit appointment. Please try again.';
+            setSubmitError(msg);
         } finally {
             setLoading(false);
         }
@@ -292,6 +299,12 @@ const PatientDashboard = () => {
                                 <p className="page-subtitle">Our AI will analyze your symptoms and assign a risk level</p>
                             </div>
 
+                            {submitError && (
+                                <div className="alert alert-error" style={{ marginBottom: '1rem' }}>
+                                    ⚠️ {submitError}
+                                </div>
+                            )}
+
                             {aiPrediction && (
                                 <div className="ai-result">
                                     <div className="ai-result-title">
@@ -310,6 +323,22 @@ const PatientDashboard = () => {
                                             <div className="ai-result-item-label">Recommended Department</div>
                                             <div className="ai-result-item-value">{aiPrediction.recommended_department}</div>
                                         </div>
+                                        {aiPrediction.queue_position != null && (
+                                            <div className="ai-result-item">
+                                                <div className="ai-result-item-label">Queue Position</div>
+                                                <div className="ai-result-item-value" style={{ color: '#2563eb', fontWeight: 800 }}>
+                                                    #{aiPrediction.queue_position}
+                                                </div>
+                                            </div>
+                                        )}
+                                        {aiPrediction.priority_score != null && (
+                                            <div className="ai-result-item">
+                                                <div className="ai-result-item-label">Priority Score</div>
+                                                <div className="ai-result-item-value" style={{ color: '#7c3aed', fontWeight: 800 }}>
+                                                    {aiPrediction.priority_score}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                     {aiPrediction.reasons?.length > 0 && (
                                         <div style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: '#1e40af' }}>

@@ -93,17 +93,33 @@ const DoctorDashboard = () => {
     useEffect(() => {
         const riskOrder = { High: 0, Medium: 1, Low: 2 };
 
+        /**
+         * Sort queue: primary → priority_score desc (if present),
+         * secondary → risk level (High first), tertiary → created_at asc
+         */
+        const sortQueue = (list) =>
+            [...list].sort((a, b) => {
+                // Prefer explicit priority_score from scheduler when available
+                const scoreA = a.priority_score ?? 0;
+                const scoreB = b.priority_score ?? 0;
+                if (scoreB !== scoreA) return scoreB - scoreA;
+
+                // Fallback: risk level
+                const riskDiff = (riskOrder[a.risk_level] ?? 3) - (riskOrder[b.risk_level] ?? 3);
+                if (riskDiff !== 0) return riskDiff;
+
+                // Tertiary: arrival time (earlier = higher priority)
+                const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+                const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+                return timeA - timeB;
+            });
+
         const onConnect = () => setSocketConnected(true);
         const onDisconnect = () => setSocketConnected(false);
 
         const onNewTriage = (data) => {
-            // Always prepend data to the triage queue, sorted by risk
-            setTriageQueue(prev => {
-                const merged = [data, ...prev.filter(p => p.id !== data.id)];
-                return merged.sort((a, b) =>
-                    (riskOrder[a.risk_level] ?? 3) - (riskOrder[b.risk_level] ?? 3)
-                );
-            });
+            // Merge into triage queue and re-sort by full priority logic
+            setTriageQueue(prev => sortQueue([data, ...prev.filter(p => p.id !== data.id)]));
 
             // Also refresh the appointments list + next-patient recommendation
             fetchAppointments();
