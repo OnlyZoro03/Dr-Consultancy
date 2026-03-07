@@ -160,7 +160,16 @@ const PatientDashboard = () => {
     };
 
     const getStatusBadge = (status) => {
-        const map = { Pending: 'badge-pending', Approved: 'badge-approved', Rejected: 'badge-rejected' };
+        const map = {
+            // AI-assigned
+            'Emergency Scheduled': 'badge-rejected',   // red
+            'Queued':              'badge-pending',     // amber
+            'Waiting':             'badge-approved',    // green
+            // Legacy
+            'Pending':  'badge-pending',
+            'Approved': 'badge-approved',
+            'Rejected': 'badge-rejected',
+        };
         return map[status] || 'badge-pending';
     };
 

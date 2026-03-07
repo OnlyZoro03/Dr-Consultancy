@@ -10,7 +10,7 @@ import HighRiskAlert, { playAlertBeep } from '../components/HighRiskAlert';
 import NextPatientRecommendation from '../components/NextPatientRecommendation';
 import socket from '../services/socket';
 import {
-    FaUserMd, FaCheck, FaTimes, FaSortAmountDown,
+    FaUserMd, FaSortAmountDown,
     FaHeartbeat, FaClipboardList, FaExclamationTriangle,
     FaClock, FaCheckCircle, FaCommentMedical, FaEdit,
     FaUser, FaPhone, FaCalendarAlt, FaVenusMars, FaRulerVertical, FaWeight,
@@ -192,9 +192,6 @@ const DoctorDashboard = () => {
     const [dashboardStats, setDashboardStats] = useState(null);
     const [dashboardLoading, setDashboardLoading] = useState(false);
     const [dashboardError, setDashboardError] = useState('');
-    const [showScheduleModal, setShowScheduleModal] = useState(false);
-    const [selectedAppt, setSelectedAppt] = useState(null);
-    const [manualDate, setManualDate] = useState('');
 
     // Pre-fetch everything on mount so real-time socket updates have a base to mutate
     useEffect(() => { fetchAppointments(); fetchTriageQueue(); fetchDashboardStats(); fetchNextPatient(); }, []);
@@ -269,12 +266,6 @@ const DoctorDashboard = () => {
 
     const handleAction = async (id, status) => {
         try {
-            if (status === 'Approved') {
-                const appt = appointments.find(a => a.id === id);
-                setSelectedAppt(appt);
-                setShowScheduleModal(true);
-                return;
-            }
             await api.put(`/doctor/appointment/${id}`, { status });
             fetchAppointments();
         } catch (err) {
@@ -282,30 +273,11 @@ const DoctorDashboard = () => {
         }
     };
 
-    const confirmApprove = async () => {
-        if (!manualDate) {
-            alert('Please select a date and time.');
-            return;
-        }
-        try {
-            await api.put(`/doctor/appointment/${selectedAppt.id}`, {
-                status: 'Approved',
-                appointment_date: manualDate
-            });
-            setShowScheduleModal(false);
-            setSelectedAppt(null);
-            setManualDate('');
-            fetchAppointments();
-        } catch (err) {
-            alert('Failed to approve appointment.');
-        }
-    };
-
     const counts = {
-        total: appointments.length,
-        pending: appointments.filter(a => a.status === 'Pending').length,
-        approved: appointments.filter(a => a.status === 'Approved').length,
-        high: appointments.filter(a => a.risk_level === 'High').length,
+        total:     appointments.length,
+        emergency: appointments.filter(a => a.status === 'Emergency Scheduled').length,
+        queued:    appointments.filter(a => a.status === 'Queued').length,
+        high:      appointments.filter(a => a.risk_level === 'High').length,
     };
 
     const getRiskBadge = (level) => {
@@ -314,9 +286,19 @@ const DoctorDashboard = () => {
         return 'badge badge-low';
     };
 
-    const getStatusBadge = (status) => {
-        const map = { Pending: 'badge badge-pending', Approved: 'badge badge-approved', Rejected: 'badge badge-rejected' };
-        return map[status] || 'badge badge-pending';
+    // Returns inline style for AI-assigned scheduling status badges.
+    // Also handles legacy statuses (Pending/Approved/Rejected) for DB backward compat.
+    const getScheduleStatusStyle = (status) => {
+        const map = {
+            'Emergency Scheduled': { background: '#fee2e2', color: '#b91c1c', border: '1.5px solid #fca5a5' },
+            'Queued':              { background: '#fef3c7', color: '#92400e', border: '1.5px solid #fcd34d' },
+            'Waiting':             { background: '#f0fdf4', color: '#166534', border: '1.5px solid #86efac' },
+            // Legacy
+            'Pending':   { background: '#fef3c7', color: '#92400e',  border: '1.5px solid #fcd34d' },
+            'Approved':  { background: '#f0fdf4', color: '#166534',  border: '1.5px solid #86efac' },
+            'Rejected':  { background: '#fee2e2', color: '#b91c1c',  border: '1.5px solid #fca5a5' },
+        };
+        return map[status] || map['Waiting'];
     };
 
     return (
@@ -441,25 +423,25 @@ const DoctorDashboard = () => {
                                     <div className="stat-icon teal"><FaClipboardList /></div>
                                     <div className="stat-info">
                                         <div className="stat-value">{counts.total}</div>
-                                        <div className="stat-label">Total Requests</div>
+                                        <div className="stat-label">Total Patients</div>
+                                    </div>
+                                </div>
+                                <div className="stat-card">
+                                    <div className="stat-icon red"><FaExclamationTriangle /></div>
+                                    <div className="stat-info">
+                                        <div className="stat-value">{counts.emergency}</div>
+                                        <div className="stat-label">Emergency Scheduled</div>
                                     </div>
                                 </div>
                                 <div className="stat-card">
                                     <div className="stat-icon orange"><FaClock /></div>
                                     <div className="stat-info">
-                                        <div className="stat-value">{counts.pending}</div>
-                                        <div className="stat-label">Awaiting Review</div>
+                                        <div className="stat-value">{counts.queued}</div>
+                                        <div className="stat-label">Queued</div>
                                     </div>
                                 </div>
                                 <div className="stat-card">
-                                    <div className="stat-icon green"><FaCheckCircle /></div>
-                                    <div className="stat-info">
-                                        <div className="stat-value">{counts.approved}</div>
-                                        <div className="stat-label">Approved</div>
-                                    </div>
-                                </div>
-                                <div className="stat-card">
-                                    <div className="stat-icon red"><FaExclamationTriangle /></div>
+                                    <div className="stat-icon red"><FaHeartbeat /></div>
                                     <div className="stat-info">
                                         <div className="stat-value">{counts.high}</div>
                                         <div className="stat-label">High Risk</div>
@@ -490,8 +472,8 @@ const DoctorDashboard = () => {
                                                 <th>Department</th>
                                                 <th>Symptoms</th>
                                                 <th>Vitals</th>
-                                                <th>Status</th>
-                                                <th>Actions</th>
+                                                <th>AI Status</th>
+                                                <th>Info</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -518,64 +500,51 @@ const DoctorDashboard = () => {
                                                     </td>
                                                     <td style={{ fontSize: '0.85rem', color: '#64748b' }}>{appt.vitals || '—'}</td>
                                                     <td>
-                                                        <span className={getStatusBadge(appt.status)}>{appt.status}</span>
+                                                        {/* AI-assigned scheduling status badge */}
+                                                        <span style={{
+                                                            ...getScheduleStatusStyle(appt.status),
+                                                            fontSize: '0.72rem', fontWeight: 700,
+                                                            padding: '3px 10px', borderRadius: 12,
+                                                            display: 'inline-block', whiteSpace: 'nowrap',
+                                                        }}>
+                                                            {appt.status}
+                                                        </span>
+                                                        {/* Priority score pill if available */}
+                                                        {(triage?.priority_score != null) && (
+                                                            <div style={{ fontSize: '0.7rem', color: '#7c3aed', fontWeight: 700, marginTop: 3 }}>
+                                                                Score: {triage.priority_score}
+                                                            </div>
+                                                        )}
                                                     </td>
                                                     <td>
-                                                        <div className="action-btns" style={{ flexWrap: 'wrap', gap: '0.35rem' }}>
-                                                            {/* AI Explanation Button */}
-                                                            <button
-                                                                onClick={() => setSelectedPatient(triage || {
-                                                                    id: appt.id,
-                                                                    name: appt.patient_name || `Patient #${appt.patient_id}`,
-                                                                    age: appt.age,
-                                                                    gender: appt.gender,
-                                                                    symptoms: appt.symptoms,
-                                                                    department: appt.recommended_department,
-                                                                    risk_level: appt.risk_level,
-                                                                    pre_existing_conditions: appt.pre_existing_conditions,
-                                                                    vitals_raw: appt.vitals,
-                                                                    vitals_structured: {},
-                                                                    confidence: null,
-                                                                    ai_explanation: {},
-                                                                })}
-                                                                title="View AI Explanation"
-                                                                style={{
-                                                                    padding: '0.4rem 0.65rem',
-                                                                    background: 'linear-gradient(135deg,#4f46e5,#7c3aed)',
-                                                                    color: '#fff', border: 'none', borderRadius: 8,
-                                                                    cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600,
-                                                                    display: 'flex', alignItems: 'center', gap: 5,
-                                                                    whiteSpace: 'nowrap',
-                                                                }}
-                                                            >
-                                                                <FaBrain style={{ fontSize: '0.75rem' }} /> AI
-                                                            </button>
-
-                                                            {appt.status === 'Pending' ? (
-                                                                <>
-                                                                    <button
-                                                                        className="btn-secondary"
-                                                                        onClick={() => handleAction(appt.id, 'Approved')}
-                                                                        title="Approve"
-                                                                        style={{ padding: '0.4rem 0.75rem' }}
-                                                                    >
-                                                                        <FaCheck />
-                                                                    </button>
-                                                                    <button
-                                                                        className="btn-danger"
-                                                                        onClick={() => handleAction(appt.id, 'Rejected')}
-                                                                        title="Reject"
-                                                                        style={{ padding: '0.4rem 0.75rem' }}
-                                                                    >
-                                                                        <FaTimes />
-                                                                    </button>
-                                                                </>
-                                                            ) : (
-                                                                <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-                                                                    {appt.status === 'Approved' ? '✅ Done' : '❌ Rejected'}
-                                                                </span>
-                                                            )}
-                                                        </div>
+                                                        {/* AI Explanation button only — no manual scheduling */}
+                                                        <button
+                                                            onClick={() => setSelectedPatient(triage || {
+                                                                id: appt.id,
+                                                                name: appt.patient_name || `Patient #${appt.patient_id}`,
+                                                                age: appt.age,
+                                                                gender: appt.gender,
+                                                                symptoms: appt.symptoms,
+                                                                department: appt.recommended_department,
+                                                                risk_level: appt.risk_level,
+                                                                pre_existing_conditions: appt.pre_existing_conditions,
+                                                                vitals_raw: appt.vitals,
+                                                                vitals_structured: {},
+                                                                confidence: null,
+                                                                ai_explanation: {},
+                                                            })}
+                                                            title="View AI Explanation"
+                                                            style={{
+                                                                padding: '0.4rem 0.65rem',
+                                                                background: 'linear-gradient(135deg,#4f46e5,#7c3aed)',
+                                                                color: '#fff', border: 'none', borderRadius: 8,
+                                                                cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600,
+                                                                display: 'flex', alignItems: 'center', gap: 5,
+                                                                whiteSpace: 'nowrap',
+                                                            }}
+                                                        >
+                                                            <FaBrain style={{ fontSize: '0.75rem' }} /> AI
+                                                        </button>
                                                     </td>
                                                 </tr>
                                                 );
@@ -852,8 +821,8 @@ const DoctorDashboard = () => {
 
                                                 <div style={{ marginTop: '1.5rem', borderTop: '1px dashed #e2e8f0', paddingTop: '1rem' }}>
                                                     <p style={{ fontSize: '0.85rem', color: '#64748b' }}>Total Patients: <strong style={{ color: '#1e293b' }}>{counts.total}</strong></p>
-                                                    <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.5rem' }}>Approved: <strong style={{ color: '#16a34a' }}>{counts.approved}</strong></p>
-                                                    <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.5rem' }}>Pending Review: <strong style={{ color: '#d97706' }}>{counts.pending}</strong></p>
+                                                    <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.5rem' }}>Emergency Scheduled: <strong style={{ color: '#dc2626' }}>{counts.emergency}</strong></p>
+                                                    <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.5rem' }}>Queued: <strong style={{ color: '#d97706' }}>{counts.queued}</strong></p>
                                                 </div>
                                             </div>
                                         </>
@@ -864,54 +833,6 @@ const DoctorDashboard = () => {
                     )}
                 </main>
             </div>
-
-            {/* Scheduling Modal */}
-            {showScheduleModal && (
-                <div className="modal-overlay">
-                    <div className="modal-content">
-                        <div className="modal-header">
-                            <h2 className="modal-title"><FaCalendarAlt /> Schedule Appointment</h2>
-                            <button className="modal-close" onClick={() => setShowScheduleModal(false)}>
-                                <FaTimes />
-                            </button>
-                        </div>
-                        <div className="modal-body">
-                            <div className="schedule-info">
-                                <p>Patient Name</p>
-                                <div className="info-value">{selectedAppt?.patient_name || `Patient #${selectedAppt?.patient_id}`}</div>
-                                <p style={{ marginTop: '0.8rem' }}>Symptoms</p>
-                                <div className="info-value" style={{ fontSize: '0.85rem' }}>{selectedAppt?.symptoms}</div>
-                            </div>
-
-                            <div className="form-group">
-                                <label className="form-label">Consultation Date & Time</label>
-                                <div className="input-wrapper">
-                                    <FaClock className="input-icon" />
-                                    <input
-                                        type="datetime-local"
-                                        value={manualDate}
-                                        onChange={(e) => setManualDate(e.target.value)}
-                                        required
-                                        className="form-control"
-                                        style={{ border: 'none', background: 'transparent', width: '100%', padding: '0.5rem 0' }}
-                                    />
-                                </div>
-                                <p style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.5rem' }}>
-                                    Select a suitable time for the consultation.
-                                </p>
-                            </div>
-                        </div>
-                        <div className="modal-footer">
-                            <button className="btn-secondary" onClick={() => setShowScheduleModal(false)}>
-                                Cancel
-                            </button>
-                            <button className="btn-primary" onClick={confirmApprove} style={{ marginTop: 0 }}>
-                                <FaCheck /> Confirm & Schedule
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* ── AI Explanation Sliding Panel ─────────────────────────── */}
             {selectedPatient && (

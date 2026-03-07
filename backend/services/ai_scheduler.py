@@ -23,6 +23,18 @@ import re
 
 RISK_WEIGHT = {'High': 3, 'Medium': 2, 'Low': 1}
 
+# AI-assigned scheduling status map
+AUTO_STATUS = {
+    'High':   'Emergency Scheduled',
+    'Medium': 'Queued',
+    'Low':    'Waiting',
+}
+
+
+def get_auto_status(risk_level: str) -> str:
+    """Return the AI-assigned scheduling status for a given risk level."""
+    return AUTO_STATUS.get(risk_level, 'Waiting')
+
 # ---------------------------------------------------------------------------
 # Core scoring helpers
 # ---------------------------------------------------------------------------

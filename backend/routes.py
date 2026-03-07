@@ -11,6 +11,7 @@ from report_analyzer import analyze_medical_report, answer_report_question
 from services.ai_scheduler import (
     compute_priority_score, compute_queue_position,
     build_triage_payload, validate_appointment_data, is_duplicate_appointment,
+    get_auto_status,
 )
 import firebase_admin
 from firebase_admin import auth as firebase_auth, credentials
@@ -292,7 +293,7 @@ def create_appointment(current_user):
         pre_existing_conditions=data.get('pre_existing_conditions', ''),
         risk_level=ai_result['risk_level'],
         recommended_department=ai_result['recommended_department'],
-        status='Pending',
+        status=get_auto_status(ai_result['risk_level']),  # AI auto-assigned
     )
     db.session.add(new_appt)
     db.session.commit()

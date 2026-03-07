@@ -54,7 +54,7 @@ class Appointment(db.Model):
     risk_level = db.Column(db.String(20)) # Low, Medium, High
     recommended_department = db.Column(db.String(50))
     
-    status = db.Column(db.String(20), default='Pending') # Pending, Approved, Rejected, Completed
+    status = db.Column(db.String(30), default='Waiting') # Emergency Scheduled, Queued, Waiting (legacy: Pending, Approved, Rejected)
     created_at = db.Column(db.DateTime, index=True, default=datetime.utcnow)
     appointment_date = db.Column(db.DateTime, nullable=True)
 
