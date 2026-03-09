@@ -15,3 +15,5 @@ pytesseract
 Pillow
 firebase-admin
 google-genai
+faiss-cpu
+sentence-transformers

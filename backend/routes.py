@@ -777,8 +777,14 @@ def serve_upload(filename):
 @app.route('/api/ai-chat', methods=['POST'])
 @token_required
 def ai_chat(current_user):
-    """General-purpose Gemini AI health chatbot for the website."""
+    """General-purpose Gemini AI health chatbot with RAG-enhanced medical knowledge."""
     from report_analyzer import _call_gemini, _call_gemini_multimodal
+    try:
+        from services.rag_engine import build_rag_context_block
+        _rag_available = True
+    except ImportError:
+        _rag_available = False
+
     data = request.get_json()
     message = (data.get('message') or '').strip()
     history = data.get('history', [])  # list of {role, text} for multi-turn context
@@ -813,12 +819,24 @@ def ai_chat(current_user):
         if message and message.lower().strip() not in auto_msgs:
             image_instruction += f"The patient also asks: {message}\n\n"
         patient_section = image_instruction
+        rag_block = ''   # Skip RAG for image-based queries; let multimodal model lead
     else:
         patient_section = f"Patient question: {message}\n\n"
+        # Retrieve relevant medical context for text queries
+        rag_block = build_rag_context_block(message) if _rag_available else ''
+
+    # Inject RAG context between system instructions and patient input
+    rag_section = (
+        f"{rag_block}\n\n"
+        "Use the medical references above as your primary factual source when relevant.\n"
+        "Always ground your answer in evidence-based clinical guidelines.\n\n"
+        if rag_block else ''
+    )
 
     prompt = (
-        "You are Dr. AI, a knowledgeable medical assistant on the Dr. Consultancy platform.\n"
-        "You help patients understand health topics, symptoms, medications, and medical reports.\n\n"
+        "You are Dr. AI, a clinical medical assistant on the Dr. Consultancy platform.\n"
+        "You help patients understand health topics, symptoms, medications, and medical reports.\n"
+        "Your responses are grounded in evidence-based clinical guidelines and curated medical reference material.\n\n"
         "CRITICAL INSTRUCTION: You MUST respond ONLY with a single valid JSON object.\n"
         "No markdown code fences, no backticks, no extra text before or after the JSON.\n\n"
         "Use EXACTLY this JSON structure:\n"
@@ -842,6 +860,7 @@ def ai_chat(current_user):
         "- advice: 2-4 actionable steps the patient should take based on these findings\n"
         "- disclaimer: always include this field\n"
         "- Tone: warm, supportive, non-alarming, easy to understand\n\n"
+        + rag_section
         + (f"Previous conversation:\n{context}\n\n" if context else "")
         + patient_section
         + "Dr. AI JSON response:"
